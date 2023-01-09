@@ -26,11 +26,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 enum ClientMessage {
 	StartGame,
+	WaitTurnComplete,
 }
 
 #[derive(Serialize, Deserialize)]
 enum ServerMessage {
 	StartGame,
+	PlayerTurn {
+		player_id: usize,
+	},
+	WaitTurn,
 }
 
 // COMPONENTS
@@ -141,6 +146,7 @@ enum GameState {
 	Loading,
 	Battle,
 	WaitTurn,
+	Wait,
 }
 
 // EVENTS
@@ -209,6 +215,14 @@ fn main() {
 			ConditionSet::new()
 				.run_in_state(GameState::WaitTurn)
 				.with_system(wait_turn_system)
+				.with_system(handle_player_turn_server_message)
+				.into()
+		)
+		.add_system_set(
+			ConditionSet::new()
+				.run_in_state(GameState::Wait)
+				//.with_system(handle_player_turn_server_message)
+				.with_system(handle_wait_turn_server_message)
 				.into()
 		)
 		.run();
@@ -385,9 +399,9 @@ fn place_units_on_map_system(mut events: EventReader<UnitsGeneratedEvent>, unit_
 		}
 		info!("DEBUG: Finished placing units on map.");
 		
-		info!("DEBUG: Setting GameState to WaitTurn...");
-		commands.insert_resource(NextState(GameState::WaitTurn));	
-		info!("DEBUG: Set GameState to WaitTurn.");
+		info!("DEBUG: Setting GameState to Wait...");
+		commands.insert_resource(NextState(GameState::Wait));	
+		info!("DEBUG: Set GameState to Wait.");
 	}
 }
 
@@ -682,16 +696,28 @@ fn move_cursor_system(input: Res<Input<KeyCode>>, mut cursors: Query<&mut Cursor
 }
 
 // Server
-fn wait_turn_system(mut units: Query<(&mut WTCurrent, &WTMax, &UnitId)>, mut game: ResMut<Game>, mut commands: Commands) {
+fn wait_turn_system(mut units: Query<(&mut WTCurrent, &WTMax, &UnitId)>, mut game: ResMut<Game>, mut commands: Commands, client: Res<Client>) {
 	
 	// Decrease all units WT. If WT equals 0, set the unit as the current unit turn.
 	for (mut wt_current, wt_max, unit_id) in units.iter_mut() {
 		if wt_current.value == 0 {
+			if game.current_unit == unit_id.value {
+				break;
+			} else {
+				game.current_unit = unit_id.value;
+			}
+			
 			info!("DEBUG: It is now unit {} turn.", unit_id.value);
-			game.current_unit = unit_id.value;
-			info!("DEBUG: Setting GameState to Battle..."); 
-			commands.insert_resource(NextState(GameState::Battle));
-			info!("DEBUG: Set GameState to Battle.");
+			// Send WaitTurnComplete message.
+			info!("DEBUG: Sending WaitTurnComplete message..."); 
+			client
+				.connection()
+				.try_send_message(ClientMessage::WaitTurnComplete);
+			info!("DEBUG: Sent WaitTurnComplete message.");
+			
+			//info!("DEBUG: Setting GameState to Wait..."); 
+			//commands.insert_resource(NextState(GameState::Wait));
+			//info!("DEBUG: Set GameState to Wait.");
 		} else {
 			wt_current.value = wt_current.value - 1;
 		}
@@ -740,19 +766,69 @@ fn start_connection(mut client: ResMut<Client>) {
 // Client
 fn handle_server_messages(
     mut client: ResMut<Client>,
+    mut events: EventWriter<GameStartEvent>,
+    mut commands: Commands,
 ) {
     while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
         match message {
-            ServerMessage::StartGame => { info!("DEBUG: Server has sent StartGame message.");}
+            ServerMessage::StartGame => { 
+				info!("DEBUG: Server has sent StartGame message.");
+				// Start game.
+				info!("DEBUG: Starting game...");
+				info!("DEBUG: Setting GameState to Loading...");
+				commands.insert_resource(NextState(GameState::Loading));
+				info!("DEBUG: Set GameState to Loading.");
+				events.send(GameStartEvent);
+			},
+			_ => { empty_system(); },
         }
     }
 }
 
+// Client
 fn send_start_game_message_system(mut input: ResMut<Input<KeyCode>>, client: Res<Client>) {
 	if input.just_pressed(KeyCode::Space) {
 		client
 			.connection()
 			.try_send_message(ClientMessage::StartGame);
+	}
+}
+
+// Client
+fn handle_player_turn_server_message(
+	mut client: ResMut<Client>,
+	mut commands: Commands,
+) {
+	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
+		match message {
+			ServerMessage::PlayerTurn { player_id } => {
+				info!("DEBUG: Received PlayerTurn message.");
+				if player_id == 1 {
+					// Set state to Battle.
+					info!("DEBUG: Setting GameState to Battle...");
+					commands.insert_resource(NextState(GameState::Battle));
+					info!("DEBUG: Set GameState to Battle.");
+				} 
+			},
+			_ => { empty_system(); },
+		}
+	}
+}
+
+fn handle_wait_turn_server_message(
+	mut client: ResMut<Client>,
+	mut commands: Commands,
+) {
+	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
+		match message {
+			ServerMessage::WaitTurn => {
+				// Set state to WaitTurn.
+				info!("DEBUG: Setting GameState to WaitTurn...");
+				commands.insert_resource(NextState(GameState::WaitTurn));
+				info!("DEBUG: Set GameState to WaitTurn.");
+			},
+			_ => { empty_system(); },
+		}
 	}
 }
 
