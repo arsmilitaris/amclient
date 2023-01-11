@@ -32,11 +32,15 @@ enum ClientMessage {
 
 #[derive(Serialize, Deserialize)]
 enum ServerMessage {
-	StartGame,
-	PlayerTurn {
-		player_id: usize,
+	StartGame {
+		client_id: ClientId,
 	},
-	WaitTurn,
+	PlayerTurn {
+		client_id: ClientId,
+	},
+	WaitTurn {
+		wait_turns: Vec<(UnitId, WTCurrent)>,
+	},
 }
 
 // COMPONENTS
@@ -59,7 +63,7 @@ struct Pos {
 	y: usize,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Serialize, Deserialize)]
 struct UnitId { value: usize, }
 
 #[derive(Component)]
@@ -80,7 +84,7 @@ struct PosY { value: usize, }
 #[derive(Component)]
 struct WTMax { value: usize, }
 
-#[derive(Component, Debug)]
+#[derive(Component, Clone, Serialize, Deserialize, Debug)]
 struct WTCurrent { value: usize, }
 
 #[derive(Component)]
@@ -173,6 +177,11 @@ struct Game {
 	current_unit: usize,
 }
 
+#[derive(Resource, Default)]
+struct ClientData {
+	client_id: ClientId,
+}
+
 // Client & Server
 fn main() {
 	
@@ -186,6 +195,7 @@ fn main() {
 		.add_event::<UnitsReadEvent>()
 		.add_event::<UnitsGeneratedEvent>()
 		.init_resource::<Game>()
+		.init_resource::<ClientData>()
 		.add_enter_system(GameState::MainMenu, start_connection)
 		.add_system_set(
 			ConditionSet::new()
@@ -210,7 +220,8 @@ fn main() {
 				.run_in_state(GameState::Battle)
 				.with_system(move_cursor_system)
 				.with_system(end_turn_system)
-				.with_system(handle_wait_turn_server_message)
+				//.with_system(handle_wait_turn_server_message)
+				.with_system(handle_player_turn_server_message)
 				.into()
 		)
 		.add_system_set(
@@ -224,7 +235,7 @@ fn main() {
 			ConditionSet::new()
 				.run_in_state(GameState::Wait)
 				.with_system(handle_player_turn_server_message)
-				.with_system(handle_wait_turn_server_message)
+				//.with_system(handle_wait_turn_server_message)
 				.into()
 		)
 		.run();
@@ -729,14 +740,14 @@ fn wait_turn_system(mut units: Query<(&mut WTCurrent, &WTMax, &UnitId)>, mut gam
 // Client
 fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTCurrent, &WTMax)>, mut commands: Commands, mut client: ResMut<Client>) {
 	if input.just_pressed(KeyCode::T) {
-		info!("DEBUG: The current unit has ended its turn.");
-		info!("DEBUG: Reseting the unit's WT.");
-		for (mut wt_current, wt_max) in units.iter_mut() {
-			if wt_current.value == 0 {
-				wt_current.value = wt_max.value;
-				break;
-			}
-		}
+		//info!("DEBUG: The current unit has ended its turn.");
+		//info!("DEBUG: Reseting the unit's WT.");
+		//for (mut wt_current, wt_max) in units.iter_mut() {
+			//if wt_current.value == 0 {
+				//wt_current.value = wt_max.value;
+				//break;
+			//}
+		//}
 		
 		info!("DEBUG: Sending Wait message...");
 		client
@@ -744,9 +755,10 @@ fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTC
 			.try_send_message(ClientMessage::Wait);
 		info!("DEBUG: Sent Wait message.");
 		
-		//info!("DEBUG: Setting GameState to WaitTurn...");
-		//commands.insert_resource(NextState(GameState::WaitTurn));
-		//info!("DEBUG: Set GameState to WaitTurn.");
+		// Set GameState to Wait.
+		info!("DEBUG: Setting GameState to Wait...");
+		//commands.insert_resource(NextState(GameState::Wait));
+		//info!("DEBUG: Set GameState to Wait.");
 	}
 }
 
@@ -776,11 +788,15 @@ fn handle_server_messages(
     mut client: ResMut<Client>,
     mut events: EventWriter<GameStartEvent>,
     mut commands: Commands,
+    mut client_data: ResMut<ClientData>,
 ) {
     while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
         match message {
-            ServerMessage::StartGame => { 
+            ServerMessage::StartGame { client_id } => { 
 				info!("DEBUG: Server has sent StartGame message.");
+				// Configure ClientId.
+				client_data.client_id = client_id;
+				
 				// Start game.
 				info!("DEBUG: Starting game...");
 				info!("DEBUG: Setting GameState to Loading...");
@@ -806,17 +822,42 @@ fn send_start_game_message_system(mut input: ResMut<Input<KeyCode>>, client: Res
 fn handle_player_turn_server_message(
 	mut client: ResMut<Client>,
 	mut commands: Commands,
+	client_data: Res<ClientData>,
+	mut units: Query<(&UnitId, &mut WTCurrent)>,
 ) {
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
-			ServerMessage::PlayerTurn { player_id } => {
+			ServerMessage::PlayerTurn { client_id } => {
 				info!("DEBUG: Received PlayerTurn message.");
-				if player_id == 1 {
+				if client_id == client_data.client_id {
 					// Set state to Battle.
 					info!("DEBUG: Setting GameState to Battle...");
 					commands.insert_resource(NextState(GameState::Battle));
 					info!("DEBUG: Set GameState to Battle.");
-				} 
+				} else {
+					// Set state to Wait.
+					info!("DEBUG: Setting GameState to Wait...");
+					commands.insert_resource(NextState(GameState::Wait));
+					info!("DEBUG: Set GameState to Wait.");
+				}
+			},
+			ServerMessage::WaitTurn { wait_turns } => {
+				info!("DEBUG: Received WaitTurn message.");
+				
+				// Update unit WTs.
+				for unit_wt in wait_turns {
+					for (unit_id, mut current_wt) in units.iter_mut() {
+						if unit_id.value == unit_wt.0.value {
+							current_wt.value = unit_wt.1.value;
+							break;
+						}
+					}
+				}
+				
+				//// Set state to WaitTurn.
+				//info!("DEBUG: Setting GameState to WaitTurn...");
+				//commands.insert_resource(NextState(GameState::WaitTurn));
+				//info!("DEBUG: Set GameState to WaitTurn.");
 			},
 			_ => { empty_system(); },
 		}
@@ -826,15 +867,27 @@ fn handle_player_turn_server_message(
 fn handle_wait_turn_server_message(
 	mut client: ResMut<Client>,
 	mut commands: Commands,
+	mut units: Query<(&UnitId, &mut WTCurrent)>, 
 ) {
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
-			ServerMessage::WaitTurn => {
+			ServerMessage::WaitTurn { wait_turns } => {
 				info!("DEBUG: Received WaitTurn message.");
-				// Set state to WaitTurn.
-				info!("DEBUG: Setting GameState to WaitTurn...");
-				commands.insert_resource(NextState(GameState::WaitTurn));
-				info!("DEBUG: Set GameState to WaitTurn.");
+				
+				// Update unit WTs.
+				for unit_wt in wait_turns {
+					for (unit_id, mut current_wt) in units.iter_mut() {
+						if unit_id.value == unit_wt.0.value {
+							current_wt.value = unit_wt.1.value;
+							break;
+						}
+					}
+				}
+				
+				//// Set state to WaitTurn.
+				//info!("DEBUG: Setting GameState to WaitTurn...");
+				//commands.insert_resource(NextState(GameState::WaitTurn));
+				//info!("DEBUG: Set GameState to WaitTurn.");
 			},
 			_ => { empty_system(); },
 		}
