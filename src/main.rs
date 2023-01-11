@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 enum ClientMessage {
+	GetClientId,
 	StartGame,
 	WaitTurnComplete,
 	Wait,
@@ -32,6 +33,9 @@ enum ClientMessage {
 
 #[derive(Serialize, Deserialize)]
 enum ServerMessage {
+	ClientId {
+		client_id: ClientId,
+	},
 	StartGame {
 		client_id: ClientId,
 	},
@@ -197,6 +201,7 @@ fn main() {
 		.init_resource::<Game>()
 		.init_resource::<ClientData>()
 		.add_enter_system(GameState::MainMenu, start_connection)
+		.add_enter_system(GameState::MainMenu, send_get_client_id_message.after(start_connection))
 		.add_system_set(
 			ConditionSet::new()
 				.run_in_state(GameState::MainMenu)
@@ -212,6 +217,7 @@ fn main() {
 				.with_system(read_battle_system)
 				.with_system(generate_units_system)
 				.with_system(place_units_on_map_system)
+				.with_system(handle_player_turn_server_message)
 				.into()
 		)
 		.add_enter_system(GameState::Battle, setup_cursor_system.run_if_not(cursor_already_spawned))
@@ -755,8 +761,8 @@ fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTC
 			.try_send_message(ClientMessage::Wait);
 		info!("DEBUG: Sent Wait message.");
 		
-		// Set GameState to Wait.
-		info!("DEBUG: Setting GameState to Wait...");
+		//// Set GameState to Wait.
+		//info!("DEBUG: Setting GameState to Wait...");
 		//commands.insert_resource(NextState(GameState::Wait));
 		//info!("DEBUG: Set GameState to Wait.");
 	}
@@ -784,6 +790,15 @@ fn start_connection(mut client: ResMut<Client>) {
 }
 
 // Client
+fn send_get_client_id_message(client: ResMut<Client>) {
+	info!("DEUBG: Sending GetClientId message...");
+	client
+		.connection()
+		.try_send_message(ClientMessage::GetClientId);
+	info!("DEUBG: Sent GetClientId message.");
+}
+
+// Client
 fn handle_server_messages(
     mut client: ResMut<Client>,
     mut events: EventWriter<GameStartEvent>,
@@ -794,8 +809,7 @@ fn handle_server_messages(
         match message {
             ServerMessage::StartGame { client_id } => { 
 				info!("DEBUG: Server has sent StartGame message.");
-				// Configure ClientId.
-				client_data.client_id = client_id;
+				
 				
 				// Start game.
 				info!("DEBUG: Starting game...");
@@ -803,6 +817,11 @@ fn handle_server_messages(
 				commands.insert_resource(NextState(GameState::Loading));
 				info!("DEBUG: Set GameState to Loading.");
 				events.send(GameStartEvent);
+			},
+			ServerMessage::ClientId { client_id } => {
+				// Configure ClientId.
+				client_data.client_id = client_id;
+				info!("DEBUG: Client ID is now {}.", client_data.client_id);
 			},
 			_ => { empty_system(); },
         }
