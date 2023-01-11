@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 enum ClientMessage {
 	StartGame,
 	WaitTurnComplete,
+	Wait,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -209,6 +210,7 @@ fn main() {
 				.run_in_state(GameState::Battle)
 				.with_system(move_cursor_system)
 				.with_system(end_turn_system)
+				.with_system(handle_wait_turn_server_message)
 				.into()
 		)
 		.add_system_set(
@@ -221,7 +223,7 @@ fn main() {
 		.add_system_set(
 			ConditionSet::new()
 				.run_in_state(GameState::Wait)
-				//.with_system(handle_player_turn_server_message)
+				.with_system(handle_player_turn_server_message)
 				.with_system(handle_wait_turn_server_message)
 				.into()
 		)
@@ -725,7 +727,7 @@ fn wait_turn_system(mut units: Query<(&mut WTCurrent, &WTMax, &UnitId)>, mut gam
 }
 
 // Client
-fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTCurrent, &WTMax)>, mut commands: Commands) {
+fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTCurrent, &WTMax)>, mut commands: Commands, mut client: ResMut<Client>) {
 	if input.just_pressed(KeyCode::T) {
 		info!("DEBUG: The current unit has ended its turn.");
 		info!("DEBUG: Reseting the unit's WT.");
@@ -736,9 +738,15 @@ fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTC
 			}
 		}
 		
-		info!("DEBUG: Setting GameState to WaitTurn...");
-		commands.insert_resource(NextState(GameState::WaitTurn));
-		info!("DEBUG: Set GameState to WaitTurn.");
+		info!("DEBUG: Sending Wait message...");
+		client
+			.connection()
+			.try_send_message(ClientMessage::Wait);
+		info!("DEBUG: Sent Wait message.");
+		
+		//info!("DEBUG: Setting GameState to WaitTurn...");
+		//commands.insert_resource(NextState(GameState::WaitTurn));
+		//info!("DEBUG: Set GameState to WaitTurn.");
 	}
 }
 
@@ -822,6 +830,7 @@ fn handle_wait_turn_server_message(
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
 			ServerMessage::WaitTurn => {
+				info!("DEBUG: Received WaitTurn message.");
 				// Set state to WaitTurn.
 				info!("DEBUG: Setting GameState to WaitTurn...");
 				commands.insert_resource(NextState(GameState::WaitTurn));
