@@ -45,6 +45,7 @@ enum ServerMessage {
 	WaitTurn {
 		wait_turns: Vec<(UnitId, WTCurrent)>,
 	},
+	Wait,
 }
 
 // COMPONENTS
@@ -877,6 +878,12 @@ fn handle_player_turn_server_message(
 				//info!("DEBUG: Setting GameState to WaitTurn...");
 				//commands.insert_resource(NextState(GameState::WaitTurn));
 				//info!("DEBUG: Set GameState to WaitTurn.");
+			},
+			ServerMessage::Wait => {
+				// Set state to Wait.
+				info!("DEBUG: Setting GameState to Wait...");
+				commands.insert_resource(NextState(GameState::Wait));
+				info!("DEBUG: Set GameState to Wait.");
 			},
 			_ => { empty_system(); },
 		}
