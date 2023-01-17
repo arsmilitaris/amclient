@@ -41,6 +41,7 @@ enum ServerMessage {
 	},
 	PlayerTurn {
 		client_id: ClientId,
+		current_unit: usize,
 	},
 	WaitTurn {
 		wait_turns: Vec<(UnitId, WTCurrent)>,
@@ -221,7 +222,9 @@ fn main() {
 				.with_system(handle_player_turn_server_message)
 				.into()
 		)
-		.add_enter_system(GameState::Battle, setup_cursor_system.run_if_not(cursor_already_spawned))
+		.add_exit_system(GameState::Loading, init_cursor_system)
+		.add_exit_system(GameState::Loading, setup_game_resource_system)
+		.add_enter_system(GameState::Battle, setup_cursor_system)
 		.add_system_set(
 			ConditionSet::new()
 				.run_in_state(GameState::Battle)
@@ -231,6 +234,7 @@ fn main() {
 				.with_system(handle_player_turn_server_message)
 				.into()
 		)
+		.add_exit_system(GameState::Battle, remove_cursor_system)
 		.add_system_set(
 			ConditionSet::new()
 				.run_in_state(GameState::WaitTurn)
@@ -425,6 +429,14 @@ fn place_units_on_map_system(mut events: EventReader<UnitsGeneratedEvent>, unit_
 	}
 }
 
+// Client
+fn init_cursor_system(mut commands: Commands) {
+	commands.spawn(Cursor {
+		x: 0,
+		y: 0,
+	});
+}
+
 // Client & Server
 fn start_game_system(mut input: ResMut<Input<KeyCode>>, mut events: EventWriter<GameStartEvent>, mut commands: Commands) {
 	if input.just_pressed(KeyCode::Space) {
@@ -451,28 +463,55 @@ fn wait_start_game_system() {
 }
 
 // Client
-fn setup_cursor_system(mut commands: Commands, mut tiles: Query<(&Tile, &Pos, &mut Text)>) {
+fn setup_cursor_system(mut commands: Commands, mut tiles: Query<(&Tile, &Pos, &mut Text)>, game: Res<Game>, units: Query<(&UnitId, &PosX, &PosY)>, mut cursors: Query<&mut Cursor>) {
 	
 	info!("DEBUG: setup_cursor_system running...");
 	// Setup cursor.
-	for (tile, pos, mut text) in tiles.iter_mut() {
-		if pos.x == 5 && pos.y == 5 {
-			// Place cursor at the center of the map.
-			info!("DEBUG: Found tile at coordinates 5, 5. Placing cursor there.");
-			
-			// Build cursor string.
-			let mut cursor = "[".to_owned();
-			cursor.push_str(&text.sections[0].value);
-			cursor.push_str("]");
-			
-			// Assign cursor string to map.
-			text.sections[0].value = cursor;
-			
-			// Spawn the cursor Entity.
-			commands.spawn(Cursor { 
-								x: 5,
-								y: 5,
-							});
+	
+	for (unit, pos_x, pos_y) in units.iter() {
+		if unit.value == game.current_unit {
+			for (tile, pos, mut text) in tiles.iter_mut() {
+				if pos.x == pos_x.value && pos.y == pos_y.value {
+					// Place cursor at the current unit position.
+					info!("DEBUG: Current unit is {}, at coordinates ({}, {}). Placing cursor there.", unit.value, pos_x.value, pos_y.value);
+					
+					// Build cursor string.
+					let mut cursor = "[".to_owned();
+					cursor.push_str(&text.sections[0].value);
+					cursor.push_str("]");
+					
+					// Assign cursor string to map.
+					text.sections[0].value = cursor;
+					
+					// Update cursor entity.
+					for mut _cursor in cursors.iter_mut() {
+						_cursor.x = pos.x;
+						_cursor.y = pos.y;
+					}
+				}
+			}
+		}
+	}
+}
+
+// Client 
+fn remove_cursor_system(cursors: Query<&Cursor>, mut tiles: Query<(&Tile, &Pos, &mut Text)>) {
+	for cursor in cursors.iter() {
+		for (tile, pos, mut text) in tiles.iter_mut() {
+			if pos.x == cursor.x && pos.y == cursor.y {
+				// Remove cursor from tile.
+				
+				// Remove [ and ] from tile.
+				let mut tile_string = &text.sections[0].value;
+				let mut tile_string_split = tile_string.split("[");
+				let vec = tile_string_split.collect::<Vec<&str>>();
+				let mut tile_string_split_2 = vec[1].split("]");
+				let vec2 = tile_string_split_2.collect::<Vec<&str>>();
+				let new_tile_string = vec2[0];
+				
+				// Assign new string to tile.
+				text.sections[0].value = new_tile_string.to_string();
+			}
 		}
 	}
 }
@@ -769,7 +808,7 @@ fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTC
 	}
 }
 
-// Server
+// Client
 fn setup_game_resource_system(mut commands: Commands) {
 	commands.insert_resource(Game {
 		current_unit: 0,
@@ -844,11 +883,17 @@ fn handle_player_turn_server_message(
 	mut commands: Commands,
 	client_data: Res<ClientData>,
 	mut units: Query<(&UnitId, &mut WTCurrent)>,
+	mut game: ResMut<Game>,
 ) {
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
-			ServerMessage::PlayerTurn { client_id } => {
+			ServerMessage::PlayerTurn { client_id, current_unit } => {
 				info!("DEBUG: Received PlayerTurn message.");
+				// Update Game resouce.
+				info!("DEBUG: Setting current unit to {}.", current_unit);
+				game.current_unit = current_unit;
+				info!("DEBUG: Set current unit to {}.", game.current_unit);
+				
 				if client_id == client_data.client_id {
 					// Set state to Battle.
 					info!("DEBUG: Setting GameState to Battle...");
