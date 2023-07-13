@@ -2,8 +2,6 @@
 
 use bevy::prelude::*;
 
-use iyes_loopless::prelude::*;
-
 use std::fs;
 
 use csv::Reader;
@@ -13,7 +11,7 @@ use kafka::producer::{Producer, Record, RequiredAcks};
 
 use bevy_quinnet::{
     client::{
-        certificate::CertificateVerificationMode, Client, ConnectionConfiguration, ConnectionEvent,
+        certificate::CertificateVerificationMode, Client, connection::ConnectionConfiguration, connection::ConnectionEvent,
         QuinnetClientPlugin, 
     },
     shared::ClientId,
@@ -27,6 +25,7 @@ use serde::{Deserialize, Serialize};
 enum ClientMessage {
 	GetClientId,
 	StartGame,
+	LoadingComplete,
 	WaitTurnComplete,
 	Wait,
 }
@@ -39,6 +38,7 @@ enum ServerMessage {
 	StartGame {
 		client_id: ClientId,
 	},
+	StartGame2,
 	PlayerTurn {
 		client_id: ClientId,
 		current_unit: usize,
@@ -151,10 +151,12 @@ struct UnitAttributes {
 
 // STATES
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(States, Debug, Clone, Eq, PartialEq, Hash, Default)]
 enum GameState {
+	#[default]
 	MainMenu,
 	Loading,
+	LoadingComplete,
 	Battle,
 	WaitTurn,
 	Wait,
@@ -162,18 +164,23 @@ enum GameState {
 
 // EVENTS
 
+#[derive(Event)]
 struct GameStartEvent;
 
+#[derive(Event)]
 struct MapReadEvent {
 	pub map: Vec<Vec<String>>,
 }
 
+#[derive(Event)]
 struct MapSetupEvent;
 
+#[derive(Event)]
 struct UnitsReadEvent {
 	pub units: Vec<StringRecord>,
 }
 
+#[derive(Event)]
 struct UnitsGeneratedEvent;
 
 // RESOURCES
@@ -194,7 +201,7 @@ fn main() {
     App::new()
 		.add_plugins(DefaultPlugins)
 		.add_plugin(QuinnetClientPlugin::default())
-		.add_loopless_state(GameState::MainMenu)
+		.add_state::<GameState>()
 		.add_event::<GameStartEvent>()
 		.add_event::<MapReadEvent>()
 		.add_event::<MapSetupEvent>()
@@ -202,52 +209,38 @@ fn main() {
 		.add_event::<UnitsGeneratedEvent>()
 		.init_resource::<Game>()
 		.init_resource::<ClientData>()
-		.add_enter_system(GameState::MainMenu, start_connection)
-		.add_enter_system(GameState::MainMenu, send_get_client_id_message.after(start_connection))
-		.add_system_set(
-			ConditionSet::new()
-				.run_in_state(GameState::MainMenu)
-				.with_system(send_start_game_message_system)
-				.with_system(handle_server_messages)
-				.into()
+		.add_systems(OnEnter(GameState::MainMenu),
+			(start_connection, send_get_client_id_message)
+				.chain()
 		)
-		.add_system_set(
-			ConditionSet::new()
-				.run_in_state(GameState::Loading)
-				.with_system(read_map_system)
-				.with_system(setup_map_system)
-				.with_system(read_battle_system)
-				.with_system(generate_units_system)
-				.with_system(place_units_on_map_system)
-				.with_system(handle_player_turn_server_message)
-				.into()
+		.add_systems(Update,
+			(send_start_game_message_system, handle_server_messages)
+				.run_if(in_state(GameState::MainMenu))
 		)
-		.add_exit_system(GameState::Loading, init_cursor_system)
-		.add_exit_system(GameState::Loading, setup_game_resource_system)
-		.add_enter_system(GameState::Battle, setup_cursor_system)
-		.add_system_set(
-			ConditionSet::new()
-				.run_in_state(GameState::Battle)
-				.with_system(move_cursor_system)
-				.with_system(end_turn_system)
-				//.with_system(handle_wait_turn_server_message)
-				.with_system(handle_player_turn_server_message)
-				.into()
+		.add_systems(Update,
+			//(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system, handle_player_turn_server_message)
+			(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system)
+				.run_if(in_state(GameState::Loading))
 		)
-		.add_exit_system(GameState::Battle, remove_cursor_system)
-		.add_system_set(
-			ConditionSet::new()
-				.run_in_state(GameState::WaitTurn)
-				.with_system(wait_turn_system)
-				.with_system(handle_player_turn_server_message)
-				.into()
+		.add_systems(OnExit(GameState::Loading), init_cursor_system)
+		.add_systems(OnExit(GameState::Loading), setup_game_resource_system)
+		.add_systems(OnEnter(GameState::LoadingComplete), loading_complete)
+		.add_systems(OnEnter(GameState::Battle), (apply_deferred, setup_cursor_system).chain())
+		.add_systems(Update,
+			(move_cursor_system, end_turn_system, (apply_state_transition::<GameState>, handle_player_turn_server_message, apply_state_transition::<GameState>).chain())
+				.run_if(in_state(GameState::Battle))
 		)
-		.add_system_set(
-			ConditionSet::new()
-				.run_in_state(GameState::Wait)
-				.with_system(handle_player_turn_server_message)
-				//.with_system(handle_wait_turn_server_message)
-				.into()
+		//.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().after(handle_player_turn_server_message).run_if(in_state(GameState::Wait)))
+		.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().run_if(in_state(GameState::Wait)))
+		.add_systems(Update, (apply_state_transition::<GameState>, current_state2).chain().run_if(in_state(GameState::Battle)))
+		.add_systems(Update, change_state.run_if(in_state(GameState::Battle)))
+		.add_systems(OnExit(GameState::Battle), remove_cursor_system)
+		//.add_systems(Update,
+		//	(wait_turn_system, handle_player_turn_server_message)
+		//		.run_if(in_state(GameState::WaitTurn))
+		//)
+		.add_systems(Update, handle_player_turn_server_message
+			.run_if(in_state(GameState::Wait))
 		)
 		.run();
 }
@@ -260,7 +253,7 @@ fn read_map_system(mut events: EventReader<GameStartEvent>, mut events2: EventWr
 	for event in events.iter() {
 		//info!("DEBUG: Reading map file...");
 	
-		let file_contents = fs::read_to_string("C:\\Users\\Isabel\\Desktop\\raul\\amserver\\src\\map.txt").unwrap();
+		let file_contents = fs::read_to_string("src\\map.txt").unwrap();
 		
 		//info!("DEBUG: Read map file.");
 		
@@ -321,18 +314,13 @@ fn setup_map_system(mut events: EventReader<MapReadEvent>, mut events2: EventWri
 							color: Color::WHITE,
 						},
 					)
-					.with_text_alignment(TextAlignment::TOP_CENTER)
+					.with_text_alignment(TextAlignment::Center)
 					.with_style(Style {
 						position_type: PositionType::Absolute,
-						position: UiRect {
-							top: Val::Px(60.0 * i_as_float),
-							right: Val::Px(60.0 * j_as_float),
-							..default()
-						},
-						max_size: Size {
-							width: Val::Px(100.0),
-							height: Val::Px(300.0),
-						},
+						top: Val::Px(60.0 * i_as_float),
+						right: Val::Px(60.0 * j_as_float),
+						max_width: Val::Px(100.0),
+						max_height: Val::Px(300.0),
 						..default()
 					}),
 					Tile,
@@ -351,7 +339,7 @@ fn setup_map_system(mut events: EventReader<MapReadEvent>, mut events2: EventWri
 // Server
 fn read_battle_system(mut events: EventReader<MapSetupEvent>, mut events2: EventWriter<UnitsReadEvent>) {
 	for event in events.iter() {
-		let mut rdr = Reader::from_path("C:\\Users\\Isabel\\Desktop\\raul\\amserver\\src\\the_patrol_ambush_data.csv").unwrap();
+		let mut rdr = Reader::from_path("src\\the_patrol_ambush_data.csv").unwrap();
 		let mut records: Vec<StringRecord> = Vec::new();
 		for result in rdr.records(){
 			let record = result.unwrap();
@@ -402,7 +390,7 @@ fn generate_units_system(mut events: EventReader<UnitsReadEvent>, mut events2: E
 }
 
 // Server
-fn place_units_on_map_system(mut events: EventReader<UnitsGeneratedEvent>, unit_positions: Query<(&UnitId, &PosX, &PosY)>, mut tiles: Query<(&Tile, &Pos, &mut Text)>, mut commands: Commands) {
+fn place_units_on_map_system(mut events: EventReader<UnitsGeneratedEvent>, unit_positions: Query<(&UnitId, &PosX, &PosY)>, mut tiles: Query<(&Tile, &Pos, &mut Text)>, mut commands: Commands, mut next_state: ResMut<NextState<GameState>>) {
 	
 	for event in events.iter() {
 		info!("DEBUG: Starting to place units on map...");
@@ -423,9 +411,15 @@ fn place_units_on_map_system(mut events: EventReader<UnitsGeneratedEvent>, unit_
 		}
 		info!("DEBUG: Finished placing units on map.");
 		
-		info!("DEBUG: Setting GameState to Wait...");
-		commands.insert_resource(NextState(GameState::Wait));	
-		info!("DEBUG: Set GameState to Wait.");
+		//info!("DEBUG: Setting GameState to Wait...");
+		////commands.insert_resource(NextState(GameState::Wait));
+		//next_state.set(GameState::Wait);	
+		//info!("DEBUG: Set GameState to Wait.");
+		
+		info!("DEBUG: Setting GameState to LoadingComplete...");
+		//commands.insert_resource(NextState(GameState::Wait));
+		next_state.set(GameState::LoadingComplete);	
+		info!("DEBUG: Set GameState to LoadingComplete.");
 	}
 }
 
@@ -438,10 +432,11 @@ fn init_cursor_system(mut commands: Commands) {
 }
 
 // Client & Server
-fn start_game_system(mut input: ResMut<Input<KeyCode>>, mut events: EventWriter<GameStartEvent>, mut commands: Commands) {
+fn start_game_system(mut input: ResMut<Input<KeyCode>>, mut events: EventWriter<GameStartEvent>, mut commands: Commands, mut next_state: ResMut<NextState<GameState>>) {
 	if input.just_pressed(KeyCode::Space) {
 		info!("DEBUG: Setting GameState to Loading...");
-		commands.insert_resource(NextState(GameState::Loading));
+		//commands.insert_resource(NextState(GameState::Loading));
+		next_state.set(GameState::Loading);
 		info!("DEBUG: Set GameState to Loading.");
         events.send(GameStartEvent);
     } 
@@ -496,6 +491,7 @@ fn setup_cursor_system(mut commands: Commands, mut tiles: Query<(&Tile, &Pos, &m
 
 // Client 
 fn remove_cursor_system(cursors: Query<&Cursor>, mut tiles: Query<(&Tile, &Pos, &mut Text)>) {
+	info!("DEBUG: Removing cursor...");
 	for cursor in cursors.iter() {
 		for (tile, pos, mut text) in tiles.iter_mut() {
 			if pos.x == cursor.x && pos.y == cursor.y {
@@ -819,14 +815,13 @@ fn setup_game_resource_system(mut commands: Commands) {
 fn start_connection(mut client: ResMut<Client>) {
 	client
 		.open_connection(
-			ConnectionConfiguration::new(
-				"127.0.0.1".to_string(),
-                6000,
-                "0.0.0.0".to_string(),
-                0,
-            ),
+			ConnectionConfiguration::from_strings(
+				//"127.0.0.1:6000",
+				"139.162.244.70:6000",
+                "0.0.0.0:0",
+            ).unwrap(),
             CertificateVerificationMode::SkipVerification,
-        );
+        ).unwrap();
 }
 
 // Client
@@ -844,6 +839,7 @@ fn handle_server_messages(
     mut events: EventWriter<GameStartEvent>,
     mut commands: Commands,
     mut client_data: ResMut<ClientData>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
     while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
         match message {
@@ -854,7 +850,8 @@ fn handle_server_messages(
 				// Start game.
 				info!("DEBUG: Starting game...");
 				info!("DEBUG: Setting GameState to Loading...");
-				commands.insert_resource(NextState(GameState::Loading));
+				//commands.insert_resource(NextState(GameState::Loading));
+				next_state.set(GameState::Loading);
 				info!("DEBUG: Set GameState to Loading.");
 				events.send(GameStartEvent);
 			},
@@ -884,11 +881,14 @@ fn handle_player_turn_server_message(
 	client_data: Res<ClientData>,
 	mut units: Query<(&UnitId, &mut WTCurrent)>,
 	mut game: ResMut<Game>,
+	mut next_state: ResMut<NextState<GameState>>,
+	state: Res<State<GameState>>,
 ) {
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
 			ServerMessage::PlayerTurn { client_id, current_unit } => {
 				info!("DEBUG: Received PlayerTurn message.");
+				info!("DEBUG: Current state is {:?}.", state.get());
 				// Update Game resouce.
 				info!("DEBUG: Setting current unit to {}.", current_unit);
 				game.current_unit = current_unit;
@@ -897,13 +897,26 @@ fn handle_player_turn_server_message(
 				if client_id == client_data.client_id {
 					// Set state to Battle.
 					info!("DEBUG: Setting GameState to Battle...");
-					commands.insert_resource(NextState(GameState::Battle));
+					//commands.insert_resource(NextState(GameState::Battle));
+					let current_state = state.get();
+					info!("DEBUG: Current state is {:?}.", current_state);
+					//match current_state {
+					//	Some(state) => {
+					//		info!("DEBUG: Current state is {:?}.", state);
+					//	},
+					//	None => {
+					//		info!("DEBUG: No current state.");
+					//	}
+					//}
+					next_state.set(GameState::Battle);
 					info!("DEBUG: Set GameState to Battle.");
 				} else {
 					// Set state to Wait.
 					info!("DEBUG: Setting GameState to Wait...");
-					commands.insert_resource(NextState(GameState::Wait));
+					//commands.insert_resource(NextState(GameState::Wait));
+					next_state.set(GameState::Wait);
 					info!("DEBUG: Set GameState to Wait.");
+					info!("DEBUG: Current state is {:?}.", state.get());
 				}
 			},
 			ServerMessage::WaitTurn { wait_turns } => {
@@ -926,9 +939,12 @@ fn handle_player_turn_server_message(
 			},
 			ServerMessage::Wait => {
 				// Set state to Wait.
+				info!("DEBUG: Received Wait message.");
 				info!("DEBUG: Setting GameState to Wait...");
-				commands.insert_resource(NextState(GameState::Wait));
+				//commands.insert_resource(NextState(GameState::Wait));
+				next_state.set(GameState::Wait);
 				info!("DEBUG: Set GameState to Wait.");
+				info!("DEBUG: Current state is {:?}.", state.get());
 			},
 			_ => { empty_system(); },
 		}
@@ -972,6 +988,605 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 		cursor_spawned = true;
 	}
 	return cursor_spawned;
+}
+
+//// Client
+//fn setup_camera_system(mut commands: Commands) {
+//	info!("DEBUG: Spawning camera...");
+//	commands.spawn(Camera2dBundle::default());
+//	info!("DEBUG: Spawned camera.");
+//}
+//
+//// Client
+//fn setup_text_system(mut query: Query<&mut Map>, mut commands: Commands, asset_server: Res<AssetServer>) {
+//	let font = asset_server.load("fonts/FiraSans-Bold.ttf");
+//	let text_style = TextStyle {
+//		font,
+//		font_size: 20.0,
+//		color: Color::WHITE,
+//	};
+//	let text_alignment = TextAlignment::Center;
+//	
+//	info!("DEBUG: Spawning tiles...");
+//	
+//	let mut map = query.single_mut();
+//	for i in 0..map.map.len() {
+//		for j in 0..map.map[i].len() {
+//			//let tile_string: String = map.map[i][j].2.to_string();
+//			
+//			for k in 0..map.map[i][j].0 {
+//				let entity_id = commands.spawn((
+//					//Text2dBundle {
+//					//	text: Text::from_section(tile_string, text_style.clone()).with_alignment(text_alignment),
+//					//	transform: Transform::from_xyz((i as f32) * 256.0 / 2.0 - (j as f32) * 256.0 / 2.0, (i as f32) * 128.0 / 2.0 + (j as f32) * 128.0 / 2.0, 0.0),
+//					//	..default()
+//					//},
+//					SpriteBundle {
+//						texture: asset_server.load("tile.png"),
+//						transform: Transform::from_xyz((i as f32) * 256.0 / 2.0 - (j as f32) * 256.0 / 2.0, ((i as f32) * 128.0 / 2.0 + (j as f32) * 128.0 / 2.0) * (111.0 / (128.0 / 2.0) - 1.0) + (k as f32) * 30.0, 1.0),
+//						..default()
+//					},
+//					GameText,
+//				)).id();
+//				
+//				map.map[i][j].3.push(entity_id);
+//			}
+//		}
+//	}
+//	
+//	info!("DEBUG: Spawned tiles.");
+//}
+//
+//// Client
+//fn z_order_system(
+//mut query: Query<&mut Transform, With<GameText>>,
+//mut unit_query: Query<&mut Transform, (With<Unit>, Without<GameText>)>,
+//map_query: Query<&Map>,
+//) {
+//	//info!("DEBUG: Z-Order system running...");
+//	let map = &map_query.single().map;
+//	//info!("DEBUG: Map length is: {}.", map.len());
+//	
+//	let mut counter = 0.0;
+//	let mut counter_2 = 0.0;
+//	
+//	for i in (0..map.len()).rev() {
+//		for j in (0..map[i].len()).rev() {
+//			counter += 0.00001;
+//			
+//			//info!("Tile Entity ID is: {:?}.", map[i][j].3);
+//			for k in 0..map[i][j].3.len() {
+//				counter_2 += 0.0000001;
+//				if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[k]) {
+//					//info!("DEBUG: Tile position is: {:?}.", tile_transform.translation);
+//					tile_transform.translation.z = counter + counter_2;
+//				}
+//			}
+//			
+//			// If there is a unit on the tile, order it.
+//			if map[i][j].2.len() > 0 {
+//				// Order unit.
+//				if let Ok(mut unit_transform) = unit_query.get_mut(map[i][j].2[0]) {
+//					if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[map[i][j].3.len() - 1]) {
+//						unit_transform.translation = tile_transform.translation;
+//						unit_transform.translation.y += 100.0;
+//						unit_transform.translation.z += 0.0000001;
+//					}
+//					//unit_transform.translation.z = counter + counter_2 + 0.0000001;
+//				}
+//			}
+//		}
+//	}
+//}
+//
+//// Client
+//fn z_unit_order_system(
+//mut query: Query<&mut Transform, With<Unit>>,
+//map_query: Query<&Map>,
+//) {
+//	let map = &map_query.single().map;
+//
+//	for i in 0..map.len() {
+//		for j in 0..map[i].len() {
+//			if map[i][j].2.len() > 0 {
+//				// Order unit.
+//				if let Ok(mut unit_transform) = query.get_mut(map[i][j].2[0]) {
+//					//if let Ok(mut tile_transform) = 
+//				}
+//				
+//				
+//			}
+//		}
+//	}
+//
+//	for unit_transform in query.iter_mut() {
+//		
+//	}
+//}
+//
+//// Client
+//fn move_camera_system(
+//mut camera_transform_query: Query<&mut Transform, With<Camera>>,
+//windows: Query<&Window, With<PrimaryWindow>>,
+//) {
+//	let window = windows.single();
+//	
+//	let mut camera_transform = camera_transform_query.single_mut();
+//	
+//	if let Some(_position) = window.cursor_position() {
+//		// Cursor is inside the window.
+//		//info!("DEBUG: Cursor position is: {:?}.", _position);
+//		//info!("DEBUG: Window width is: {:?}.", window.width());
+//		//info!("DEBUG: Window height is: {:?}.", window.height());
+//		
+//		if _position.x <= 0.0 + 20.0 {
+//			//info!("DEBUG: Camera translation is: {:?}.", camera_transform.translation);
+//			camera_transform.translation -= Vec3::X * 3.0;
+//		} else if _position.x >= window.width() - 20.0 {
+//			camera_transform.translation += Vec3::X * 3.0;
+//		}
+//		
+//		if _position.y <= 0.0 + 20.0 {
+//			//info!("DEBUG: Camera translation is: {:?}.", camera_transform.translation);
+//			camera_transform.translation += Vec3::Y * 3.0;
+//		} else if _position.y >= window.height() - 20.0 {
+//			camera_transform.translation -= Vec3::Y * 3.0;
+//		}
+//		
+//	} else {
+//		// Cursor is not inside the window.
+//	}
+//}
+//
+//// Client
+//fn spawn_gaul_warrior(
+//mut commands: Commands,
+//mut map_query: Query<&mut Map>,
+//asset_server: Res<AssetServer>,
+//) {
+//	info!("DEBUG: Spawning Gaul Warrior...");
+//	
+//	let mut map = &mut map_query.single_mut().map;
+//	
+//	let entity_id = commands.spawn((
+//		SpriteBundle {
+//			texture: asset_server.load("gaul_warrior.png"),
+//			transform: Transform::from_xyz((0 as f32) * 256.0 / 2.0 - (0 as f32) * 256.0 / 2.0, (0 as f32) * 128.0 / 2.0 + (0 as f32) * 128.0 / 2.0 + (map[0][0].0 as f32) * 15.0 + 100.0, 1.0),
+//			..default()
+//		},
+//		Unit,
+//		Pos {
+//			x: 0,
+//			y: 0,
+//		},
+//		UnitActions { unit_actions: Vec::<(UnitAction, f32)>::new(), processing_unit_action: false, },
+//	)).id();
+//	
+//	map[0][0].2.push(entity_id);
+//	
+//	info!("DEBUG: Spawned Gaul Warrior.");
+//}
+//
+//// Prototype
+//fn spawn_naked_swordsman(
+//mut commands: Commands,
+//mut map_query: Query<&mut Map>,
+//asset_server: Res<AssetServer>,
+//) {
+//	let mut map = &mut map_query.single_mut().map;
+//	
+//	info!("DEBUG: Spawning Naked Swordsman...");
+//	
+//	let entity_id = commands.spawn((
+//		SpriteBundle {
+//			texture: asset_server.load("naked_fanatic_swordsman_east.png"),
+//			transform: Transform::from_xyz((4 as f32) * 256.0 / 2.0 - (4 as f32) * 256.0 / 2.0, (4 as f32) * 128.0 / 2.0 + (4 as f32) * 128.0 / 2.0 + (map[4][4].0 as f32) * 15.0 + 100.0, 1.0),
+//			..default()
+//		},
+//		Unit,
+//		Pos {
+//			x: 4,
+//			y: 4,
+//		},
+//		UnitActions { unit_actions: Vec::<(UnitAction, f32)>::new(), processing_unit_action: false, },
+//		NakedSwordsman {},
+//	)).id();
+//	
+//	map[4][4].2.push(entity_id);
+//	
+//	info!("DEBUG: Spawned Naked Swordsman.");
+//}
+//
+//// Prototype
+//fn move_gaul_warrior(
+//mut map_query: Query<&mut Map>,
+//mut unit_query: Query<(Entity, &mut Pos, &mut Handle<Image>), With<Unit>>,
+//mut input: ResMut<Input<KeyCode>>,
+//mut asset_server: Res<AssetServer>,
+//) {
+//	let mut map = &mut map_query.single_mut().map;
+//	
+//	if input.just_pressed(KeyCode::W) {
+//		info!("DEBUG: W pressed.");
+//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+//			if pos.y == (map.len() - 1) {
+//				info!("DEBUG: You can't move there.");
+//			} else {
+//				// Change unit sprite to face north.
+//				//info!("DEBUG: Sprite is: {:?}.", sprite);
+//				*sprite = asset_server.load("gaul_spearman_north.png");
+//				map[pos.x][pos.y + 1].2.push(entity_id);
+//				map[pos.x][pos.y].2.pop();
+//				pos.y += 1;
+//			}
+//		}
+//	}
+//	
+//	if input.just_pressed(KeyCode::S) {
+//		info!("DEBUG: S pressed.");
+//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+//			if pos.y == 0 {
+//				info!("DEBUG: You can't move there.");
+//			} else {
+//				// Change unit sprite to face south.
+//				//info!("DEBUG: Sprite is: {:?}.", sprite);
+//				*sprite = asset_server.load("gaul_spearman_south.png");
+//				map[pos.x][pos.y - 1].2.push(entity_id);
+//				map[pos.x][pos.y].2.pop();
+//				pos.y -= 1;
+//			}
+//		}
+//	} 
+//	
+//	if input.just_pressed(KeyCode::D) {
+//		info!("DEBUG: D pressed.");
+//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+//			if pos.x == (map.len() - 1) {
+//				info!("DEBUG: You can't move there.");
+//			} else {
+//				// Change unit sprite to face east.
+//				//info!("DEBUG: Sprite is: {:?}.", sprite);
+//				*sprite = asset_server.load("gaul_spearman_east.png");
+//				map[pos.x + 1][pos.y].2.push(entity_id);
+//				map[pos.x][pos.y].2.pop();
+//				pos.x += 1;
+//			}
+//		}
+//	} 
+//	
+//	if input.just_pressed(KeyCode::A) {
+//		info!("DEBUG: A pressed.");
+//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+//			if pos.x == 0 {
+//				info!("DEBUG: You can't move there.");
+//			} else {
+//				// Change unit sprite to face south.
+//				//info!("DEBUG: Sprite is: {:?}.", sprite);
+//				*sprite = asset_server.load("gaul_spearman_west.png");
+//				map[pos.x - 1][pos.y].2.push(entity_id);
+//				map[pos.x][pos.y].2.pop();
+//				pos.x -= 1;
+//			}
+//		}
+//	} 
+//}
+//
+//// Utility
+//fn print_gaul_warrior(
+//query: Query<&Transform, With<Unit>>,
+//) {
+//	let unit_transform = query.single();
+//	info!("DEBUG: Unit translation is: {:?}.", unit_transform.translation);
+//}
+//
+//// Client & Server
+//fn grid_already_setup(query: Query<&Map>) -> bool {
+//	if query.iter().len() == 0 {
+//		return false;
+//	} else {
+//		return true;
+//	}
+//}
+//
+//// Client
+//fn text_already_setup(query: Query<&GameText>) -> bool {
+//	if query.iter().len() == 0 {
+//		return false;
+//	} else {
+//		return true;
+//	}
+//}
+//
+//// Client
+//fn warrior_already_spawned(query: Query<&Unit>) -> bool {
+//	if query.iter().len() == 0 {
+//		return false;
+//	} else {
+//		return true;
+//	}
+//}
+//
+//// Client
+//fn test_system(text: Query<&Transform, With<GameText>>) {
+//	info!("DEBUG: Text is at position {}.", text.single().translation);
+//}
+//
+//// Client
+//fn center_camera_on_unit(
+//unit_transform_query: Query<&Transform, With<Unit>>,
+//mut camera_transform_query: Query<&mut Transform, (With<Camera>, Without<Unit>)>,
+//) {
+//	let unit_transform = unit_transform_query.single();
+//	let mut camera_transform = camera_transform_query.single_mut();
+//	
+//	camera_transform.translation = Vec3::new(unit_transform.translation.x, unit_transform.translation.y, camera_transform.translation.z);
+//}
+//
+//fn test_ortho_projection(
+//ortho_projection_query: Query<&OrthographicProjection>,
+//) {
+//	let ortho_projection = ortho_projection_query.single();
+//	
+//	info!("DEBUG: Orthographic projection far is: {:?}.", ortho_projection.far);
+//}
+//
+//// Prototype
+//fn process_unit_actions(
+//mut commands: Commands,
+//mut unit_actions_query: Query<(Entity, &mut UnitActions)>,
+//mut map_query: Query<&mut Map>,
+//time: Res<Time>,
+//) {
+//	let map = &map_query.single_mut().map;
+//	
+//	//info!("DEBUG: unit_actions_query length is: {}.", unit_actions_query.iter().len());
+//	
+//	for (entity, mut unit_actions) in unit_actions_query.iter_mut() {
+//		
+//		if unit_actions.unit_actions.len() == 0 {
+//			continue;
+//		} else if unit_actions.processing_unit_action == true {
+//			continue;
+//		} else if time.elapsed_seconds() < unit_actions.unit_actions[0].1 {
+//			continue;
+//		} else if unit_actions.unit_actions[0].1 == 0.0 || time.elapsed_seconds() >= unit_actions.unit_actions[0].1 {
+//			unit_actions.processing_unit_action = true;
+//			
+//			let current_unit_action = &unit_actions.unit_actions[0].0;
+//		
+//			match current_unit_action {
+//				UnitAction::Move { destination } => {
+//					info!("DEBUG: Current unit action is Move.");
+//					commands.entity(entity).insert(MoveAction { destination: destination.clone(), });
+//				},
+//				UnitAction::Talk { message } => {
+//					info!("DEBUG: Current unit action is Talk.");
+//					commands.entity(entity).insert(TalkAction { message: message.clone(), });
+//				},
+//			}
+//		}
+//	}
+//}
+//
+//// Prototype
+//fn first_move_unit_action(
+//mut unit_query: Query<(Entity, &mut UnitActions), (With<Unit>, With<NakedSwordsman>)>,
+//) {
+//	for (entity, mut unit_actions) in unit_query.iter_mut() {
+//		//unit_actions.unit_actions.0.push(UnitAction::Move { destination: Pos { x: 2, y: 2, } });
+//		info!("DEBUG: Added Move UnitAction.");
+//		info!("DEBUG: unit_actions length is now: {}.", unit_actions.unit_actions.len());
+//	}
+//}
+//
+//// Prototype
+//fn first_talk_unit_action(
+//mut unit_query: Query<(Entity, &mut UnitActions), With<Unit>>,
+//) {
+//	for (entity, mut unit_actions) in unit_query.iter_mut() {
+//		//unit_actions.unit_actions.0.push(UnitAction::Talk { message: "Lorem ipsum".to_string() });
+//		info!("DEBUG: Added Talk UnitAction.");
+//		info!("DEBUG: unit_actions length is now: {}.", unit_actions.unit_actions.len());
+//		break;
+//	}
+//}
+//
+//// Prototype
+//fn process_move_actions(
+//mut commands: Commands,
+//mut map_query: Query<&mut Map>,
+//mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos,  &MoveAction)>,
+//) {
+//	let map = &mut map_query.single_mut().map;
+//	
+//	for (entity, mut unit_actions, mut pos, move_action) in unit_query.iter_mut() {
+//		info!("DEBUG: Processing MoveAction...");
+//		info!("DEBUG: Move destination is: {}, {}.", move_action.destination.x, move_action.destination.y);
+//		
+//		// Move unit.
+//		if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
+//			info!("DEBUG: Couldn't move unit. There's an unit already there.");
+//		} else {
+//			// Update unit position.
+//			
+//			map[move_action.destination.x][move_action.destination.y].2.push(entity);
+//			map[pos.x][pos.y].2.pop();
+//			
+//			pos.x = move_action.destination.x;
+//			pos.y = move_action.destination.y;
+//		}
+//		
+//		
+//		unit_actions.processing_unit_action = false;
+//		unit_actions.unit_actions.remove(0);
+//		commands.entity(entity).remove::<MoveAction>();
+//		info!("DEBUG: Processed MoveAction.");
+//	}
+//}
+//
+//// Prototype
+//fn process_talk_actions(
+//mut commands: Commands,
+//mut unit_query: Query<(Entity, &mut UnitActions, &TalkAction)>,
+//asset_server: Res<AssetServer>,
+//) {
+//	
+//	
+//	for (entity, mut unit_actions, talk_action) in unit_query.iter_mut() {
+//		
+//		info!("DEBUG: Processing talk action...");
+//		
+//		let portrait = asset_server.load("gaul_spearman_portrait.png");
+//		
+//		commands
+//			.spawn((NodeBundle {
+//				style: Style {
+//					width: Val::Percent(100.0),
+//					height: Val::Percent(20.0),
+//					position_type: PositionType::Absolute,
+//					top: Val::Percent(0.0),
+//					..Default::default()
+//				},
+//				background_color: BackgroundColor(Color::BLACK),
+//				..Default::default()
+//			}))
+//			.with_children(|parent| {
+//			
+//				// Add the character portrait
+//				parent.spawn((ImageBundle {
+//					style: Style {
+//						width: Val::Percent(20.0),
+//						height: Val::Percent(100.0),
+//						..Default::default()
+//					},
+//					image: UiImage::new(portrait.clone()),
+//					..Default::default()
+//				}));
+//				
+//				// Add the message text
+//				parent.spawn((TextBundle {
+//					text: Text::from_section(
+//						talk_action.message.clone(),
+//						TextStyle {
+//							font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+//							font_size: 20.0,
+//							color: Color::WHITE,
+//						},
+//					),
+//					..Default::default()
+//				}));
+//			});
+//		unit_actions.unit_actions.remove(0);
+//		unit_actions.processing_unit_action = false;
+//		commands.entity(entity).remove::<TalkAction>();
+//		info!("DEBUG: Processed talk action.");
+//	}
+//}
+//
+//// Prototype
+//fn second_move_action(
+//mut commands: Commands,
+//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
+//) {
+//	info!("DEBUG: Adding second Move UnitAction...");
+//	let (entity, mut unit_actions) = swordsman_query.single_mut();
+//	//unit_actions.unit_actions.0.push(UnitAction::Move { destination: Pos { x: 4, y: 2, } });
+//	info!("DEBUG: Added second Move UnitAction.");
+//}
+//
+//// Prototype
+//fn third_move_action(
+//mut commands: Commands,
+//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
+//) {
+//	info!("DEBUG: Adding third Move UnitAction...");
+//	let (entity, mut unit_actions) = swordsman_query.single_mut();
+//	//unit_actions.unit_actions.0.push(UnitAction::Move { destination: Pos { x: 6, y: 2, } });
+//	info!("DEBUG: Added third Move UnitAction.");
+//}
+//
+//// Prototype
+//fn setup_two_seconds_timer(
+//mut timers: ResMut<Timers>,
+//) {
+//	timers.two_second_timer = Timer::from_seconds(4.0, TimerMode::Once);
+//	timers.six_second_timer = Timer::from_seconds(6.0, TimerMode::Once);
+//}
+//
+//// Prototype
+//fn two_seconds_have_passed(
+//timers: Res<Timers>,
+//
+//) -> bool {
+//	if timers.two_second_timer.just_finished() {
+//		return true;
+//	} else {
+//		return false;
+//	}
+//}
+//
+//// Prototype
+//fn six_seconds_have_passed(
+//timers: Res<Timers>,
+//) -> bool {
+//	return timers.six_second_timer.just_finished();
+//}
+//
+//// Prototype
+//fn cutscene_1(mut commands: Commands,
+//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
+//) {
+//	//info!("DEBUG: Adding third Move UnitAction...");
+//	let (entity, mut unit_actions) = swordsman_query.single_mut();
+//	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
+//	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
+//	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
+//	info!("DEBUG: Added Move UnitActions.");
+//	
+//	unit_actions.unit_actions.push((UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
+//	info!("DEBUG: Added Talk UnitAction.");
+//}
+//
+//// Prototype
+//fn tick_timers(mut timers: ResMut<Timers>, time: Res<Time>) {
+//	timers.two_second_timer.tick(time.delta());
+//	timers.six_second_timer.tick(time.delta());
+//}
+//
+
+// Client
+fn loading_complete(client: Res<Client>, mut next_state: ResMut<NextState<GameState>>, state: Res<State<GameState>>) {
+	info!("DEBUG: Sending LoadingComplete message...");
+	client
+		.connection()
+		.try_send_message(ClientMessage::LoadingComplete);
+	info!("DEBUG: Sent LoadingComplete message.");
+	
+	info!("DEBUG: Setting GameState to Wait...");
+	//commands.insert_resource(NextState(GameState::Wait));
+	next_state.set(GameState::Wait);	
+	info!("DEBUG: Set GameState to Wait.");
+	info!("DEBUG: Current state is {:?}.", state.get());
+}
+
+fn current_state(state: Res<State<GameState>>) {
+	info!("DEBUG: Current state is: {:?}.", state.get());
+}
+
+fn current_state2(state: Res<State<GameState>>) {
+	info!("DEBUG: Current state is: {:?}.", state.get());
+}
+
+fn change_state(mut next_state: ResMut<NextState<GameState>>, mut input: ResMut<Input<KeyCode>>) {
+
+	if input.just_pressed(KeyCode::Space) {
+
+		next_state.set(GameState::Wait);
+	}
 }
 
 fn empty_system() {
