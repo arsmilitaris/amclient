@@ -231,9 +231,9 @@ fn main() {
 				.run_if(in_state(GameState::Battle))
 		)
 		//.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().after(handle_player_turn_server_message).run_if(in_state(GameState::Wait)))
-		.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().run_if(in_state(GameState::Wait)))
-		.add_systems(Update, (apply_state_transition::<GameState>, current_state2).chain().run_if(in_state(GameState::Battle)))
-		.add_systems(Update, change_state.run_if(in_state(GameState::Battle)))
+		//.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().run_if(in_state(GameState::Wait)))
+		//.add_systems(Update, (apply_state_transition::<GameState>, current_state2).chain().run_if(in_state(GameState::Battle)))
+		//.add_systems(Update, change_state.run_if(in_state(GameState::Battle)))
 		.add_systems(OnExit(GameState::Battle), remove_cursor_system)
 		//.add_systems(Update,
 		//	(wait_turn_system, handle_player_turn_server_message)
