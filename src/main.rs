@@ -1,13 +1,14 @@
 // (C) Copyright 2023 Ars Militaris Dev
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use bevy::asset::AssetPath;
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use csv::Reader;
 use csv::StringRecord;
-
-use kafka::producer::{Producer, Record, RequiredAcks};
 
 use bevy_quinnet::{
     client::{
@@ -17,9 +18,16 @@ use bevy_quinnet::{
     shared::ClientId,
 };
 
-pub mod kafka_am;
-
 use serde::{Deserialize, Serialize};
+
+enum UnitAction {
+	Move {
+		destination: Pos,
+	},
+	Talk {
+		message: String,
+	},
+}
 
 #[derive(Serialize, Deserialize)]
 enum ClientMessage {
@@ -52,18 +60,52 @@ enum ServerMessage {
 // COMPONENTS
 
 #[derive(Component)]
+struct NakedSwordsman {
+
+}
+
+#[derive(Component)]
+struct MoveAction {
+	destination: Pos,
+}
+
+#[derive(Component)]
+struct TalkAction {
+	message: String,
+}
+
+#[derive(Component)]
+struct UnitActions {
+	unit_actions: Vec<(UnitAction, f32)>,
+	processing_unit_action: bool,
+}
+
+#[derive(Component)]
 struct Cursor {
 	x: usize,
 	y: usize,
 }
 
 #[derive(Component)]
+struct Map {
+	map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>,
+}
+
+#[derive(Component)]
 struct Tile;
+
+#[derive(Component, Debug, Clone, PartialEq)]
+enum TileType {
+	Grass, 
+}
+
+#[derive(Component)]
+struct GameText;
 
 #[derive(Component)]
 struct Unit;
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 struct Pos {
 	x: usize,
 	y: usize,
@@ -126,6 +168,9 @@ struct DEX { value: usize, }
 #[derive(Component)]
 struct LUK { value: usize, }
 
+#[derive(Component)]
+struct UnitSprite { value: String, }
+
 #[derive(Bundle)]
 struct UnitAttributes {
 	unit_id: UnitId,
@@ -147,6 +192,7 @@ struct UnitAttributes {
 	agi: AGI,
 	dex: DEX,
 	luk: LUK,
+	unit_sprite: UnitSprite,
 }
 
 // STATES
@@ -160,6 +206,7 @@ enum GameState {
 	Battle,
 	WaitTurn,
 	Wait,
+	Ambush,
 }
 
 // EVENTS
@@ -219,7 +266,7 @@ fn main() {
 		)
 		.add_systems(Update,
 			//(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system, handle_player_turn_server_message)
-			(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system)
+			(read_map_system, setup_map_system, read_battle_system, (generate_units_system, apply_deferred).chain(),  place_units_on_map_system)
 				.run_if(in_state(GameState::Loading))
 		)
 		.add_systems(OnExit(GameState::Loading), init_cursor_system)
@@ -242,6 +289,101 @@ fn main() {
 		.add_systems(Update, handle_player_turn_server_message
 			.run_if(in_state(GameState::Wait))
 		)
+		.add_systems(OnEnter(GameState::Ambush), setup_grid_system)
+		.add_systems(OnEnter(GameState::Ambush), setup_camera_system)
+		.add_systems(OnEnter(GameState::Ambush), (apply_deferred, setup_text_system)
+			.chain()
+			.after(setup_grid_system)
+		)
+		.add_systems(OnEnter(GameState::Ambush), (apply_deferred, spawn_units)
+			.chain()
+			.after(setup_grid_system)
+		)
+		.add_systems(Update, z_order_system
+			.run_if(in_state(GameState::Ambush))
+			.run_if(text_already_setup)
+		)
+		.add_systems(Update, move_camera_system
+			.run_if(in_state(GameState::Ambush))
+		)
+		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
+		//	.chain()
+		//	.after(setup_text_system)
+		//)
+		//.add_systems(OnEnter(GameState::Ambush), (apply_deferred, spawn_naked_swordsman)
+		//	.chain()
+		//	//.after(spawn_gaul_warrior)
+		//	.after(setup_text_system)
+		//)
+		.add_systems(Update, move_gaul_warrior
+			.run_if(in_state(GameState::Ambush))
+			//.run_if(warrior_already_spawned)
+		)
+		.add_systems(Update, (process_unit_actions, apply_deferred)
+			.chain()
+			.run_if(in_state(GameState::Ambush))
+			//.run_if(warrior_already_spawned)
+		)
+		//.add_systems(Update, (apply_deferred, first_move_unit_action)
+		//	.chain()
+		//	.run_if(in_state(GameState::Ambush).and_then(run_once()))
+		//	.after(spawn_naked_swordsman)
+		//)
+		.add_systems(Update, (apply_deferred, process_move_actions, apply_deferred)
+			.chain()
+			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
+			.chain()
+			.run_if(in_state(GameState::Ambush))
+		)
+		//.add_systems(Update, setup_two_seconds_timer
+		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
+		//	//.after(first_move_unit_action)
+		//)
+		//.add_systems(OnEnter(GameState::Ambush), (apply_deferred, cutscene_1)
+		//	.chain()
+		//	.after(spawn_naked_swordsman)
+		//)
+		//.add_systems(Update, second_move_action
+		//	.run_if(in_state(GameState::LoadMap))
+		//	.run_if(two_seconds_have_passed)
+		//	.after(first_move_unit_action)
+		//)
+		//.add_systems(Update, (apply_deferred, first_talk_unit_action)
+		//	.chain()
+		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
+		//	//.after(third_move_action)
+		//)
+		//.add_systems(Update, third_move_action
+		//	.run_if(six_seconds_have_passed)
+		//	.after(second_move_action)
+		//)
+		//.add_systems(Update, (second_move_action.run_if(two_seconds_have_passed), third_move_action.run_if(six_seconds_have_passed), first_talk_unit_action.run_if(run_once()))
+		//	.chain()
+		//	.run_if(in_state(GameState::LoadMap))
+		//	.after(first_move_unit_action)
+		//)
+		//.add_systems(Update, tick_timers
+		//	.run_if(in_state(GameState::LoadMap))
+		//)
+		//.add_systems(Update, (apply_deferred, test_system_3)
+		//	.chain()
+		//	.run_if(in_state(GameState::LoadMap))
+		//)
+		//.add_systems(Update, print_gaul_warrior
+		//	.run_if(in_state(GameState::LoadMap))
+		//	.run_if(warrior_already_spawned)
+		//)
+		//.add_systems(Update, (apply_deferred, center_camera_on_unit)
+		//	.chain()
+		//	.run_if(in_state(GameState::LoadMap))
+		//	.run_if(warrior_already_spawned)
+		//)
+		//.add_systems(Update, (apply_deferred, test_ortho_projection)
+		//	.chain()
+		//	.run_if(in_state(GameState::LoadMap))
+		//)
 		.run();
 }
 
@@ -381,6 +523,7 @@ fn generate_units_system(mut events: EventReader<UnitsReadEvent>, mut events2: E
 					agi : AGI { value: record[16].parse().unwrap(), },
 					dex : DEX { value: record[17].parse().unwrap(), },
 					luk : LUK { value: record[18].parse().unwrap(), },
+					unit_sprite : UnitSprite { value: record[19].to_string(), },
 				},
 				Unit,
 			));
@@ -440,21 +583,6 @@ fn start_game_system(mut input: ResMut<Input<KeyCode>>, mut events: EventWriter<
 		info!("DEBUG: Set GameState to Loading.");
         events.send(GameStartEvent);
     } 
-}
-
-fn wait_start_game_system() {
-	
-	match kafka_am::consumer::GameConsumer::new("topic1") {
-		Ok(gc) => {
-			//println!("GameConsumer connected!");
-			let message = gc.recv();
-			info!("DEBUG: Kafka message is: {:?}", message);
-		},
-		Err(e) => {
-			println!("Error creating GameConsumer: {:?}", e);
-			std::process::exit(1);
-		}
-	};
 }
 
 // Client
@@ -866,11 +994,13 @@ fn handle_server_messages(
 }
 
 // Client
-fn send_start_game_message_system(mut input: ResMut<Input<KeyCode>>, client: Res<Client>) {
+fn send_start_game_message_system(mut input: ResMut<Input<KeyCode>>, client: Res<Client>, mut next_state: ResMut<NextState<GameState>>) {
 	if input.just_pressed(KeyCode::Space) {
 		client
 			.connection()
 			.try_send_message(ClientMessage::StartGame);
+	} else if input.just_pressed(KeyCode::M) {
+		next_state.set(GameState::Ambush);
 	}
 }
 
@@ -990,153 +1120,177 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 	return cursor_spawned;
 }
 
-//// Client
-//fn setup_camera_system(mut commands: Commands) {
-//	info!("DEBUG: Spawning camera...");
-//	commands.spawn(Camera2dBundle::default());
-//	info!("DEBUG: Spawned camera.");
-//}
-//
-//// Client
-//fn setup_text_system(mut query: Query<&mut Map>, mut commands: Commands, asset_server: Res<AssetServer>) {
-//	let font = asset_server.load("fonts/FiraSans-Bold.ttf");
-//	let text_style = TextStyle {
-//		font,
-//		font_size: 20.0,
-//		color: Color::WHITE,
-//	};
-//	let text_alignment = TextAlignment::Center;
-//	
-//	info!("DEBUG: Spawning tiles...");
-//	
-//	let mut map = query.single_mut();
-//	for i in 0..map.map.len() {
-//		for j in 0..map.map[i].len() {
-//			//let tile_string: String = map.map[i][j].2.to_string();
-//			
-//			for k in 0..map.map[i][j].0 {
-//				let entity_id = commands.spawn((
-//					//Text2dBundle {
-//					//	text: Text::from_section(tile_string, text_style.clone()).with_alignment(text_alignment),
-//					//	transform: Transform::from_xyz((i as f32) * 256.0 / 2.0 - (j as f32) * 256.0 / 2.0, (i as f32) * 128.0 / 2.0 + (j as f32) * 128.0 / 2.0, 0.0),
-//					//	..default()
-//					//},
-//					SpriteBundle {
-//						texture: asset_server.load("tile.png"),
-//						transform: Transform::from_xyz((i as f32) * 256.0 / 2.0 - (j as f32) * 256.0 / 2.0, ((i as f32) * 128.0 / 2.0 + (j as f32) * 128.0 / 2.0) * (111.0 / (128.0 / 2.0) - 1.0) + (k as f32) * 30.0, 1.0),
-//						..default()
-//					},
-//					GameText,
-//				)).id();
-//				
-//				map.map[i][j].3.push(entity_id);
-//			}
-//		}
-//	}
-//	
-//	info!("DEBUG: Spawned tiles.");
-//}
-//
-//// Client
-//fn z_order_system(
-//mut query: Query<&mut Transform, With<GameText>>,
-//mut unit_query: Query<&mut Transform, (With<Unit>, Without<GameText>)>,
-//map_query: Query<&Map>,
-//) {
-//	//info!("DEBUG: Z-Order system running...");
-//	let map = &map_query.single().map;
-//	//info!("DEBUG: Map length is: {}.", map.len());
-//	
-//	let mut counter = 0.0;
-//	let mut counter_2 = 0.0;
-//	
-//	for i in (0..map.len()).rev() {
-//		for j in (0..map[i].len()).rev() {
-//			counter += 0.00001;
-//			
-//			//info!("Tile Entity ID is: {:?}.", map[i][j].3);
-//			for k in 0..map[i][j].3.len() {
-//				counter_2 += 0.0000001;
-//				if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[k]) {
-//					//info!("DEBUG: Tile position is: {:?}.", tile_transform.translation);
-//					tile_transform.translation.z = counter + counter_2;
-//				}
-//			}
-//			
-//			// If there is a unit on the tile, order it.
-//			if map[i][j].2.len() > 0 {
-//				// Order unit.
-//				if let Ok(mut unit_transform) = unit_query.get_mut(map[i][j].2[0]) {
-//					if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[map[i][j].3.len() - 1]) {
-//						unit_transform.translation = tile_transform.translation;
-//						unit_transform.translation.y += 100.0;
-//						unit_transform.translation.z += 0.0000001;
-//					}
-//					//unit_transform.translation.z = counter + counter_2 + 0.0000001;
-//				}
-//			}
-//		}
-//	}
-//}
-//
-//// Client
-//fn z_unit_order_system(
-//mut query: Query<&mut Transform, With<Unit>>,
-//map_query: Query<&Map>,
-//) {
-//	let map = &map_query.single().map;
-//
-//	for i in 0..map.len() {
-//		for j in 0..map[i].len() {
-//			if map[i][j].2.len() > 0 {
-//				// Order unit.
-//				if let Ok(mut unit_transform) = query.get_mut(map[i][j].2[0]) {
-//					//if let Ok(mut tile_transform) = 
-//				}
-//				
-//				
-//			}
-//		}
-//	}
-//
-//	for unit_transform in query.iter_mut() {
-//		
-//	}
-//}
-//
-//// Client
-//fn move_camera_system(
-//mut camera_transform_query: Query<&mut Transform, With<Camera>>,
-//windows: Query<&Window, With<PrimaryWindow>>,
-//) {
-//	let window = windows.single();
-//	
-//	let mut camera_transform = camera_transform_query.single_mut();
-//	
-//	if let Some(_position) = window.cursor_position() {
-//		// Cursor is inside the window.
-//		//info!("DEBUG: Cursor position is: {:?}.", _position);
-//		//info!("DEBUG: Window width is: {:?}.", window.width());
-//		//info!("DEBUG: Window height is: {:?}.", window.height());
-//		
-//		if _position.x <= 0.0 + 20.0 {
-//			//info!("DEBUG: Camera translation is: {:?}.", camera_transform.translation);
-//			camera_transform.translation -= Vec3::X * 3.0;
-//		} else if _position.x >= window.width() - 20.0 {
-//			camera_transform.translation += Vec3::X * 3.0;
-//		}
-//		
-//		if _position.y <= 0.0 + 20.0 {
-//			//info!("DEBUG: Camera translation is: {:?}.", camera_transform.translation);
-//			camera_transform.translation += Vec3::Y * 3.0;
-//		} else if _position.y >= window.height() - 20.0 {
-//			camera_transform.translation -= Vec3::Y * 3.0;
-//		}
-//		
-//	} else {
-//		// Cursor is not inside the window.
-//	}
-//}
+// Client
+fn setup_grid_system(mut commands: Commands) {
+	// Create map.
+	info!("DEBUG: Creating map...");
+	let mut map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>> = Vec::new();
+	for i in 0..30 {
+		let mut map_line: Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)> = Vec::new();
+		for j in 0..30 {
+			map_line.push((1, TileType::Grass, Vec::new(), Vec::new()));
+		}
+		map.push(map_line);
+	}
+	
+	//for i in 0..3 {
+	//	map[i][0].0 = 10;
+	//}
+	
+	info!("DEBUG: Created map.");
+	
+	commands.spawn((
+		Map { map: map },
+	));
+}
+
+// Client
+fn setup_camera_system(mut commands: Commands) {
+	info!("DEBUG: Spawning camera...");
+	commands.spawn(Camera2dBundle::default());
+	info!("DEBUG: Spawned camera.");
+}
+
+// Client
+fn setup_text_system(mut query: Query<&mut Map>, mut commands: Commands, asset_server: Res<AssetServer>) {
+	let font = asset_server.load("fonts/FiraSans-Bold.ttf");
+	let text_style = TextStyle {
+		font,
+		font_size: 20.0,
+		color: Color::WHITE,
+	};
+	let text_alignment = TextAlignment::Center;
+	
+	info!("DEBUG: Spawning tiles...");
+	
+	let mut map = query.single_mut();
+	for i in 0..map.map.len() {
+		for j in 0..map.map[i].len() {
+			//let tile_string: String = map.map[i][j].2.to_string();
+			
+			for k in 0..map.map[i][j].0 {
+				let entity_id = commands.spawn((
+					//Text2dBundle {
+					//	text: Text::from_section(tile_string, text_style.clone()).with_alignment(text_alignment),
+					//	transform: Transform::from_xyz((i as f32) * 256.0 / 2.0 - (j as f32) * 256.0 / 2.0, (i as f32) * 128.0 / 2.0 + (j as f32) * 128.0 / 2.0, 0.0),
+					//	..default()
+					//},
+					SpriteBundle {
+						texture: asset_server.load("tile.png"),
+						transform: Transform::from_xyz((i as f32) * 256.0 / 2.0 - (j as f32) * 256.0 / 2.0, ((i as f32) * 128.0 / 2.0 + (j as f32) * 128.0 / 2.0) * (111.0 / (128.0 / 2.0) - 1.0) + (k as f32) * 30.0, 1.0),
+						..default()
+					},
+					GameText,
+				)).id();
+				
+				map.map[i][j].3.push(entity_id);
+			}
+		}
+	}
+	
+	info!("DEBUG: Spawned tiles.");
+}
+
+// Client
+fn z_order_system(
+mut query: Query<&mut Transform, With<GameText>>,
+mut unit_query: Query<&mut Transform, (With<Unit>, Without<GameText>)>,
+map_query: Query<&Map>,
+) {
+	//info!("DEBUG: Z-Order system running...");
+	let map = &map_query.single().map;
+	//info!("DEBUG: Map length is: {}.", map.len());
+	
+	let mut counter = 0.0;
+	let mut counter_2 = 0.0;
+	
+	for i in (0..map.len()).rev() {
+		for j in (0..map[i].len()).rev() {
+			counter += 0.00001;
+			
+			//info!("Tile Entity ID is: {:?}.", map[i][j].3);
+			for k in 0..map[i][j].3.len() {
+				counter_2 += 0.0000001;
+				if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[k]) {
+					//info!("DEBUG: Tile position is: {:?}.", tile_transform.translation);
+					tile_transform.translation.z = counter + counter_2;
+				}
+			}
+			
+			// If there is a unit on the tile, order it.
+			if map[i][j].2.len() > 0 {
+				// Order unit.
+				if let Ok(mut unit_transform) = unit_query.get_mut(map[i][j].2[0]) {
+					if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[map[i][j].3.len() - 1]) {
+						unit_transform.translation = tile_transform.translation;
+						unit_transform.translation.y += 100.0;
+						unit_transform.translation.z += 0.0000001;
+					}
+					//unit_transform.translation.z = counter + counter_2 + 0.0000001;
+				}
+			}
+		}
+	}
+}
+
+// Client
+fn z_unit_order_system(
+mut query: Query<&mut Transform, With<Unit>>,
+map_query: Query<&Map>,
+) {
+	let map = &map_query.single().map;
+
+	for i in 0..map.len() {
+		for j in 0..map[i].len() {
+			if map[i][j].2.len() > 0 {
+				// Order unit.
+				if let Ok(mut unit_transform) = query.get_mut(map[i][j].2[0]) {
+					//if let Ok(mut tile_transform) = 
+				}
+				
+				
+			}
+		}
+	}
+
+	for unit_transform in query.iter_mut() {
+		
+	}
+}
+
+// Client
+fn move_camera_system(
+mut camera_transform_query: Query<&mut Transform, With<Camera>>,
+windows: Query<&Window, With<PrimaryWindow>>,
+) {
+	let window = windows.single();
+	
+	let mut camera_transform = camera_transform_query.single_mut();
+	
+	if let Some(_position) = window.cursor_position() {
+		// Cursor is inside the window.
+		//info!("DEBUG: Cursor position is: {:?}.", _position);
+		//info!("DEBUG: Window width is: {:?}.", window.width());
+		//info!("DEBUG: Window height is: {:?}.", window.height());
+		
+		if _position.x <= 0.0 + 20.0 {
+			//info!("DEBUG: Camera translation is: {:?}.", camera_transform.translation);
+			camera_transform.translation -= Vec3::X * 3.0;
+		} else if _position.x >= window.width() - 20.0 {
+			camera_transform.translation += Vec3::X * 3.0;
+		}
+		
+		if _position.y <= 0.0 + 20.0 {
+			//info!("DEBUG: Camera translation is: {:?}.", camera_transform.translation);
+			camera_transform.translation += Vec3::Y * 3.0;
+		} else if _position.y >= window.height() - 20.0 {
+			camera_transform.translation -= Vec3::Y * 3.0;
+		}
+		
+	} else {
+		// Cursor is not inside the window.
+	}
+}
 //
 //// Client
 //fn spawn_gaul_warrior(
@@ -1167,113 +1321,113 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 //	info!("DEBUG: Spawned Gaul Warrior.");
 //}
 //
-//// Prototype
-//fn spawn_naked_swordsman(
-//mut commands: Commands,
-//mut map_query: Query<&mut Map>,
-//asset_server: Res<AssetServer>,
-//) {
-//	let mut map = &mut map_query.single_mut().map;
-//	
-//	info!("DEBUG: Spawning Naked Swordsman...");
-//	
-//	let entity_id = commands.spawn((
-//		SpriteBundle {
-//			texture: asset_server.load("naked_fanatic_swordsman_east.png"),
-//			transform: Transform::from_xyz((4 as f32) * 256.0 / 2.0 - (4 as f32) * 256.0 / 2.0, (4 as f32) * 128.0 / 2.0 + (4 as f32) * 128.0 / 2.0 + (map[4][4].0 as f32) * 15.0 + 100.0, 1.0),
-//			..default()
-//		},
-//		Unit,
-//		Pos {
-//			x: 4,
-//			y: 4,
-//		},
-//		UnitActions { unit_actions: Vec::<(UnitAction, f32)>::new(), processing_unit_action: false, },
-//		NakedSwordsman {},
-//	)).id();
-//	
-//	map[4][4].2.push(entity_id);
-//	
-//	info!("DEBUG: Spawned Naked Swordsman.");
-//}
+// Prototype
+fn spawn_naked_swordsman(
+mut commands: Commands,
+mut map_query: Query<&mut Map>,
+asset_server: Res<AssetServer>,
+) {
+	let mut map = &mut map_query.single_mut().map;
+	
+	info!("DEBUG: Spawning Naked Swordsman...");
+	
+	let entity_id = commands.spawn((
+		SpriteBundle {
+			texture: asset_server.load("naked_fanatic_swordsman_east.png"),
+			transform: Transform::from_xyz((4 as f32) * 256.0 / 2.0 - (4 as f32) * 256.0 / 2.0, (4 as f32) * 128.0 / 2.0 + (4 as f32) * 128.0 / 2.0 + (map[4][4].0 as f32) * 15.0 + 100.0, 1.0),
+			..default()
+		},
+		Unit,
+		Pos {
+			x: 4,
+			y: 4,
+		},
+		UnitActions { unit_actions: Vec::<(UnitAction, f32)>::new(), processing_unit_action: false, },
+		NakedSwordsman {},
+	)).id();
+	
+	map[4][4].2.push(entity_id);
+	
+	info!("DEBUG: Spawned Naked Swordsman.");
+}
 //
-//// Prototype
-//fn move_gaul_warrior(
-//mut map_query: Query<&mut Map>,
-//mut unit_query: Query<(Entity, &mut Pos, &mut Handle<Image>), With<Unit>>,
-//mut input: ResMut<Input<KeyCode>>,
-//mut asset_server: Res<AssetServer>,
-//) {
-//	let mut map = &mut map_query.single_mut().map;
-//	
-//	if input.just_pressed(KeyCode::W) {
-//		info!("DEBUG: W pressed.");
-//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
-//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
-//			if pos.y == (map.len() - 1) {
-//				info!("DEBUG: You can't move there.");
-//			} else {
-//				// Change unit sprite to face north.
-//				//info!("DEBUG: Sprite is: {:?}.", sprite);
-//				*sprite = asset_server.load("gaul_spearman_north.png");
-//				map[pos.x][pos.y + 1].2.push(entity_id);
-//				map[pos.x][pos.y].2.pop();
-//				pos.y += 1;
-//			}
-//		}
-//	}
-//	
-//	if input.just_pressed(KeyCode::S) {
-//		info!("DEBUG: S pressed.");
-//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
-//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
-//			if pos.y == 0 {
-//				info!("DEBUG: You can't move there.");
-//			} else {
-//				// Change unit sprite to face south.
-//				//info!("DEBUG: Sprite is: {:?}.", sprite);
-//				*sprite = asset_server.load("gaul_spearman_south.png");
-//				map[pos.x][pos.y - 1].2.push(entity_id);
-//				map[pos.x][pos.y].2.pop();
-//				pos.y -= 1;
-//			}
-//		}
-//	} 
-//	
-//	if input.just_pressed(KeyCode::D) {
-//		info!("DEBUG: D pressed.");
-//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
-//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
-//			if pos.x == (map.len() - 1) {
-//				info!("DEBUG: You can't move there.");
-//			} else {
-//				// Change unit sprite to face east.
-//				//info!("DEBUG: Sprite is: {:?}.", sprite);
-//				*sprite = asset_server.load("gaul_spearman_east.png");
-//				map[pos.x + 1][pos.y].2.push(entity_id);
-//				map[pos.x][pos.y].2.pop();
-//				pos.x += 1;
-//			}
-//		}
-//	} 
-//	
-//	if input.just_pressed(KeyCode::A) {
-//		info!("DEBUG: A pressed.");
-//		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
-//		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
-//			if pos.x == 0 {
-//				info!("DEBUG: You can't move there.");
-//			} else {
-//				// Change unit sprite to face south.
-//				//info!("DEBUG: Sprite is: {:?}.", sprite);
-//				*sprite = asset_server.load("gaul_spearman_west.png");
-//				map[pos.x - 1][pos.y].2.push(entity_id);
-//				map[pos.x][pos.y].2.pop();
-//				pos.x -= 1;
-//			}
-//		}
-//	} 
-//}
+// Prototype
+fn move_gaul_warrior(
+mut map_query: Query<&mut Map>,
+mut unit_query: Query<(Entity, &mut Pos, &mut Handle<Image>), With<NakedSwordsman>>,
+mut input: ResMut<Input<KeyCode>>,
+mut asset_server: Res<AssetServer>,
+) {
+	let mut map = &mut map_query.single_mut().map;
+	
+	if input.just_pressed(KeyCode::W) {
+		info!("DEBUG: W pressed.");
+		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+			if pos.y == (map.len() - 1) {
+				info!("DEBUG: You can't move there.");
+			} else {
+				// Change unit sprite to face north.
+				//info!("DEBUG: Sprite is: {:?}.", sprite);
+				*sprite = asset_server.load("naked_fanatic_swordsman_north.png");
+				map[pos.x][pos.y + 1].2.push(entity_id);
+				map[pos.x][pos.y].2.pop();
+				pos.y += 1;
+			}
+		}
+	}
+	
+	if input.just_pressed(KeyCode::S) {
+		info!("DEBUG: S pressed.");
+		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+			if pos.y == 0 {
+				info!("DEBUG: You can't move there.");
+			} else {
+				// Change unit sprite to face south.
+				//info!("DEBUG: Sprite is: {:?}.", sprite);
+				*sprite = asset_server.load("naked_fanatic_swordsman_south.png");
+				map[pos.x][pos.y - 1].2.push(entity_id);
+				map[pos.x][pos.y].2.pop();
+				pos.y -= 1;
+			}
+		}
+	} 
+	
+	if input.just_pressed(KeyCode::D) {
+		info!("DEBUG: D pressed.");
+		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+			if pos.x == (map.len() - 1) {
+				info!("DEBUG: You can't move there.");
+			} else {
+				// Change unit sprite to face east.
+				//info!("DEBUG: Sprite is: {:?}.", sprite);
+				*sprite = asset_server.load("naked_fanatic_swordsman_east.png");
+				map[pos.x + 1][pos.y].2.push(entity_id);
+				map[pos.x][pos.y].2.pop();
+				pos.x += 1;
+			}
+		}
+	} 
+	
+	if input.just_pressed(KeyCode::A) {
+		info!("DEBUG: A pressed.");
+		//info!("DEBUG: unit_query length is: {}.", unit_query.iter_mut().len());
+		for (entity_id, mut pos, mut sprite) in unit_query.iter_mut() {
+			if pos.x == 0 {
+				info!("DEBUG: You can't move there.");
+			} else {
+				// Change unit sprite to face south.
+				//info!("DEBUG: Sprite is: {:?}.", sprite);
+				*sprite = asset_server.load("naked_fanatic_swordsman_west.png");
+				map[pos.x - 1][pos.y].2.push(entity_id);
+				map[pos.x][pos.y].2.pop();
+				pos.x -= 1;
+			}
+		}
+	} 
+}
 //
 //// Utility
 //fn print_gaul_warrior(
@@ -1283,24 +1437,24 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 //	info!("DEBUG: Unit translation is: {:?}.", unit_transform.translation);
 //}
 //
-//// Client & Server
-//fn grid_already_setup(query: Query<&Map>) -> bool {
-//	if query.iter().len() == 0 {
-//		return false;
-//	} else {
-//		return true;
-//	}
-//}
-//
-//// Client
-//fn text_already_setup(query: Query<&GameText>) -> bool {
-//	if query.iter().len() == 0 {
-//		return false;
-//	} else {
-//		return true;
-//	}
-//}
-//
+// Client & Server
+fn grid_already_setup(query: Query<&Map>) -> bool {
+	if query.iter().len() == 0 {
+		return false;
+	} else {
+		return true;
+	}
+}
+
+// Client
+fn text_already_setup(query: Query<&GameText>) -> bool {
+	if query.iter().len() == 0 {
+		return false;
+	} else {
+		return true;
+	}
+}
+
 //// Client
 //fn warrior_already_spawned(query: Query<&Unit>) -> bool {
 //	if query.iter().len() == 0 {
@@ -1334,44 +1488,44 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 //	info!("DEBUG: Orthographic projection far is: {:?}.", ortho_projection.far);
 //}
 //
-//// Prototype
-//fn process_unit_actions(
-//mut commands: Commands,
-//mut unit_actions_query: Query<(Entity, &mut UnitActions)>,
-//mut map_query: Query<&mut Map>,
-//time: Res<Time>,
-//) {
-//	let map = &map_query.single_mut().map;
-//	
-//	//info!("DEBUG: unit_actions_query length is: {}.", unit_actions_query.iter().len());
-//	
-//	for (entity, mut unit_actions) in unit_actions_query.iter_mut() {
-//		
-//		if unit_actions.unit_actions.len() == 0 {
-//			continue;
-//		} else if unit_actions.processing_unit_action == true {
-//			continue;
-//		} else if time.elapsed_seconds() < unit_actions.unit_actions[0].1 {
-//			continue;
-//		} else if unit_actions.unit_actions[0].1 == 0.0 || time.elapsed_seconds() >= unit_actions.unit_actions[0].1 {
-//			unit_actions.processing_unit_action = true;
-//			
-//			let current_unit_action = &unit_actions.unit_actions[0].0;
-//		
-//			match current_unit_action {
-//				UnitAction::Move { destination } => {
-//					info!("DEBUG: Current unit action is Move.");
-//					commands.entity(entity).insert(MoveAction { destination: destination.clone(), });
-//				},
-//				UnitAction::Talk { message } => {
-//					info!("DEBUG: Current unit action is Talk.");
-//					commands.entity(entity).insert(TalkAction { message: message.clone(), });
-//				},
-//			}
-//		}
-//	}
-//}
-//
+// Prototype
+fn process_unit_actions(
+mut commands: Commands,
+mut unit_actions_query: Query<(Entity, &mut UnitActions)>,
+mut map_query: Query<&mut Map>,
+time: Res<Time>,
+) {
+	let map = &map_query.single_mut().map;
+	
+	//info!("DEBUG: unit_actions_query length is: {}.", unit_actions_query.iter().len());
+	
+	for (entity, mut unit_actions) in unit_actions_query.iter_mut() {
+		
+		if unit_actions.unit_actions.len() == 0 {
+			continue;
+		} else if unit_actions.processing_unit_action == true {
+			continue;
+		} else if time.elapsed_seconds() < unit_actions.unit_actions[0].1 {
+			continue;
+		} else if unit_actions.unit_actions[0].1 == 0.0 || time.elapsed_seconds() >= unit_actions.unit_actions[0].1 {
+			unit_actions.processing_unit_action = true;
+			
+			let current_unit_action = &unit_actions.unit_actions[0].0;
+		
+			match current_unit_action {
+				UnitAction::Move { destination } => {
+					info!("DEBUG: Current unit action is Move.");
+					commands.entity(entity).insert(MoveAction { destination: destination.clone(), });
+				},
+				UnitAction::Talk { message } => {
+					info!("DEBUG: Current unit action is Talk.");
+					commands.entity(entity).insert(TalkAction { message: message.clone(), });
+				},
+			}
+		}
+	}
+}
+
 //// Prototype
 //fn first_move_unit_action(
 //mut unit_query: Query<(Entity, &mut UnitActions), (With<Unit>, With<NakedSwordsman>)>,
@@ -1395,97 +1549,97 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 //	}
 //}
 //
-//// Prototype
-//fn process_move_actions(
-//mut commands: Commands,
-//mut map_query: Query<&mut Map>,
-//mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos,  &MoveAction)>,
-//) {
-//	let map = &mut map_query.single_mut().map;
-//	
-//	for (entity, mut unit_actions, mut pos, move_action) in unit_query.iter_mut() {
-//		info!("DEBUG: Processing MoveAction...");
-//		info!("DEBUG: Move destination is: {}, {}.", move_action.destination.x, move_action.destination.y);
-//		
-//		// Move unit.
-//		if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
-//			info!("DEBUG: Couldn't move unit. There's an unit already there.");
-//		} else {
-//			// Update unit position.
-//			
-//			map[move_action.destination.x][move_action.destination.y].2.push(entity);
-//			map[pos.x][pos.y].2.pop();
-//			
-//			pos.x = move_action.destination.x;
-//			pos.y = move_action.destination.y;
-//		}
-//		
-//		
-//		unit_actions.processing_unit_action = false;
-//		unit_actions.unit_actions.remove(0);
-//		commands.entity(entity).remove::<MoveAction>();
-//		info!("DEBUG: Processed MoveAction.");
-//	}
-//}
-//
-//// Prototype
-//fn process_talk_actions(
-//mut commands: Commands,
-//mut unit_query: Query<(Entity, &mut UnitActions, &TalkAction)>,
-//asset_server: Res<AssetServer>,
-//) {
-//	
-//	
-//	for (entity, mut unit_actions, talk_action) in unit_query.iter_mut() {
-//		
-//		info!("DEBUG: Processing talk action...");
-//		
-//		let portrait = asset_server.load("gaul_spearman_portrait.png");
-//		
-//		commands
-//			.spawn((NodeBundle {
-//				style: Style {
-//					width: Val::Percent(100.0),
-//					height: Val::Percent(20.0),
-//					position_type: PositionType::Absolute,
-//					top: Val::Percent(0.0),
-//					..Default::default()
-//				},
-//				background_color: BackgroundColor(Color::BLACK),
-//				..Default::default()
-//			}))
-//			.with_children(|parent| {
-//			
-//				// Add the character portrait
-//				parent.spawn((ImageBundle {
-//					style: Style {
-//						width: Val::Percent(20.0),
-//						height: Val::Percent(100.0),
-//						..Default::default()
-//					},
-//					image: UiImage::new(portrait.clone()),
-//					..Default::default()
-//				}));
-//				
-//				// Add the message text
-//				parent.spawn((TextBundle {
-//					text: Text::from_section(
-//						talk_action.message.clone(),
-//						TextStyle {
-//							font: asset_server.load("fonts/FiraSans-Bold.ttf"),
-//							font_size: 20.0,
-//							color: Color::WHITE,
-//						},
-//					),
-//					..Default::default()
-//				}));
-//			});
-//		unit_actions.unit_actions.remove(0);
-//		unit_actions.processing_unit_action = false;
-//		commands.entity(entity).remove::<TalkAction>();
-//		info!("DEBUG: Processed talk action.");
-//	}
-//}
+// Prototype
+fn process_move_actions(
+mut commands: Commands,
+mut map_query: Query<&mut Map>,
+mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos,  &MoveAction)>,
+) {
+	let map = &mut map_query.single_mut().map;
+	
+	for (entity, mut unit_actions, mut pos, move_action) in unit_query.iter_mut() {
+		info!("DEBUG: Processing MoveAction...");
+		info!("DEBUG: Move destination is: {}, {}.", move_action.destination.x, move_action.destination.y);
+		
+		// Move unit.
+		if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
+			info!("DEBUG: Couldn't move unit. There's an unit already there.");
+		} else {
+			// Update unit position.
+			
+			map[move_action.destination.x][move_action.destination.y].2.push(entity);
+			map[pos.x][pos.y].2.pop();
+			
+			pos.x = move_action.destination.x;
+			pos.y = move_action.destination.y;
+		}
+		
+		
+		unit_actions.processing_unit_action = false;
+		unit_actions.unit_actions.remove(0);
+		commands.entity(entity).remove::<MoveAction>();
+		info!("DEBUG: Processed MoveAction.");
+	}
+}
+
+// Prototype
+fn process_talk_actions(
+mut commands: Commands,
+mut unit_query: Query<(Entity, &mut UnitActions, &TalkAction)>,
+asset_server: Res<AssetServer>,
+) {
+	
+	
+	for (entity, mut unit_actions, talk_action) in unit_query.iter_mut() {
+		
+		info!("DEBUG: Processing talk action...");
+		
+		let portrait = asset_server.load("gaul_spearman_portrait.png");
+		
+		commands
+			.spawn((NodeBundle {
+				style: Style {
+					width: Val::Percent(100.0),
+					height: Val::Percent(20.0),
+					position_type: PositionType::Absolute,
+					top: Val::Percent(0.0),
+					..Default::default()
+				},
+				background_color: BackgroundColor(Color::BLACK),
+				..Default::default()
+			}))
+			.with_children(|parent| {
+			
+				// Add the character portrait
+				parent.spawn((ImageBundle {
+					style: Style {
+						width: Val::Percent(20.0),
+						height: Val::Percent(100.0),
+						..Default::default()
+					},
+					image: UiImage::new(portrait.clone()),
+					..Default::default()
+				}));
+				
+				// Add the message text
+				parent.spawn((TextBundle {
+					text: Text::from_section(
+						talk_action.message.clone(),
+						TextStyle {
+							font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+							font_size: 20.0,
+							color: Color::WHITE,
+						},
+					),
+					..Default::default()
+				}));
+			});
+		unit_actions.unit_actions.remove(0);
+		unit_actions.processing_unit_action = false;
+		commands.entity(entity).remove::<TalkAction>();
+		info!("DEBUG: Processed talk action.");
+	}
+}
 //
 //// Prototype
 //fn second_move_action(
@@ -1536,20 +1690,97 @@ fn cursor_already_spawned(cursors: Query<&Cursor>) -> bool {
 //	return timers.six_second_timer.just_finished();
 //}
 //
-//// Prototype
-//fn cutscene_1(mut commands: Commands,
-//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
-//) {
-//	//info!("DEBUG: Adding third Move UnitAction...");
-//	let (entity, mut unit_actions) = swordsman_query.single_mut();
-//	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
-//	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
-//	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
-//	info!("DEBUG: Added Move UnitActions.");
-//	
-//	unit_actions.unit_actions.push((UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
-//	info!("DEBUG: Added Talk UnitAction.");
-//}
+// Prototype
+fn cutscene_1(mut commands: Commands,
+mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
+) {
+	//info!("DEBUG: Adding third Move UnitAction...");
+	let (entity, mut unit_actions) = swordsman_query.single_mut();
+	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
+	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
+	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
+	info!("DEBUG: Added Move UnitActions.");
+	
+	unit_actions.unit_actions.push((UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
+	info!("DEBUG: Added Talk UnitAction.");
+}
+
+// Client
+fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_query: Query<&mut Map>) {
+	info!("DEBUG: Starting to spawn units...");
+
+	let mut map = &mut map_query.single_mut().map;
+
+	let mut rdr = Reader::from_path("src\\the_patrol_ambush_data.csv").unwrap();
+	let mut records: Vec<StringRecord> = Vec::new();
+	for result in rdr.records(){
+		let record = result.unwrap();
+		//info!("{:?}", record);
+		records.push(record);
+	}
+	
+	for record in records {
+		info!("DEBUG: Creating new unit...");
+		let entity_id = commands.spawn((
+			UnitAttributes {
+				unit_id : UnitId { value: record[0].parse().unwrap(), },
+				unit_team : UnitTeam { value: record[1].parse().unwrap(), },
+				unit_name : UnitName { value: record[2].to_string(), },
+				unit_class : UnitClass { value: record[3].to_string(), },
+				pos_x : PosX { value: record[4].parse().unwrap(), }, 
+				pos_y : PosY { value: record[5].parse().unwrap(), },
+				wt_max : WTMax { value: record[6].parse().unwrap(), },
+				wt_current : WTCurrent{ value: record[7].parse().unwrap(), },
+				hp_max : HPMax { value: record[8].parse().unwrap(), },
+				hp_current : HPCurrent { value: record[9].parse().unwrap(), },
+				mp_max : MPMax { value: record[10].parse().unwrap(), },
+				mp_current : MPCurrent { value: record[11].parse().unwrap(), },
+				str : STR { value: record[12].parse().unwrap(), },
+				vit : VIT { value: record[13].parse().unwrap(), },
+				int : INT { value: record[14].parse().unwrap(), },
+				men : MEN { value: record[15].parse().unwrap(), },
+				agi : AGI { value: record[16].parse().unwrap(), },
+				dex : DEX { value: record[17].parse().unwrap(), },
+				luk : LUK { value: record[18].parse().unwrap(), },
+				unit_sprite : UnitSprite { value: record[19].to_string(), },
+			},
+			Unit,
+			
+			Pos {
+				x: record[4].parse().unwrap(),
+				y: record[5].parse().unwrap(),
+			},
+		)).id();
+		
+		let mut path_string: String = record[19].to_string();
+		path_string.push_str("_east.png");
+		//let path_buf = PathBuf::from(path_string);
+		//let path = Path::new(&path_string);
+		//let asset_path = AssetPath::new_ref(path, None);
+		//let mut asset_path: AssetPath<'static> = AssetPath::from(String::from(record[19].to_string()));
+		//let path_buf: PathBuf = asset_path.as_ref().into();
+		//let modified_path = format!("{:?}{}", asset_path, "_east.png");
+		//let modified_path = asset_path.to_string_lossy().to_string() + "_east.png";
+		//let modified_path = path_buf.with_extension("").to_string_lossy().to_string() + "_east.png";
+		//info!("DEBUG: Unit path is: {:?}.", asset_path);
+		//let modified_path = asset_path.to_string() + "_east.png";
+		//asset_path = AssetPath::from(modified_path);
+		
+		commands.entity(entity_id).insert(SpriteBundle {
+					texture: asset_server.load(path_string),
+					transform: Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0),
+					..default()
+		},);
+		
+		map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].2.push(entity_id);
+		
+		info!("DEBUG: Unit transform is: {:?}.", Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0));
+		//info!("DEBUG: 
+	}
+	
+	info!("DEBUG: Finished spawning units.");
+}
+
 //
 //// Prototype
 //fn tick_timers(mut timers: ResMut<Timers>, time: Res<Time>) {

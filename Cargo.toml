@@ -8,6 +8,5 @@ edition = "2021"
 [dependencies]
 bevy = "0.11"
 csv = "1.1.6"
-kafka = "0.9.0"
 bevy_quinnet = "0.5"
 serde = "1.0.152"
