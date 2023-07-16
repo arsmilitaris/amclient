@@ -10,3 +10,8 @@ bevy = "0.11"
 csv = "1.1.6"
 bevy_quinnet = "0.5"
 serde = "1.0.152"
+image = "0.24.6"
+winit = "0.28.6"
+
+[build-dependencies]
+embed-resource = "1.6.3"

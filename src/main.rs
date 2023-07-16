@@ -3,6 +3,8 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::asset::AssetPath;
+use bevy::winit::WinitWindows;
+use winit::window::Icon;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -246,7 +248,14 @@ struct ClientData {
 fn main() {
 	
     App::new()
-		.add_plugins(DefaultPlugins)
+		.add_plugins(
+			DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Ars Militaris".into(),
+                    ..default()
+                }),
+                ..default()
+            }))
 		.add_plugin(QuinnetClientPlugin::default())
 		.add_state::<GameState>()
 		.add_event::<GameStartEvent>()
@@ -256,6 +265,7 @@ fn main() {
 		.add_event::<UnitsGeneratedEvent>()
 		.init_resource::<Game>()
 		.init_resource::<ClientData>()
+		.add_systems(Startup, set_window_icon)
 		.add_systems(OnEnter(GameState::MainMenu),
 			(start_connection, send_get_client_id_message)
 				.chain()
@@ -388,6 +398,36 @@ fn main() {
 }
 
 // SYSTEMS
+
+// Client
+fn set_window_icon(
+    // we have to use `NonSend` here
+    windows: NonSend<WinitWindows>,
+    window_query: Query<(Entity, &Window), With<PrimaryWindow>>,
+) {
+	let (entity, window) = window_query.single();
+	
+	let primary = windows.get_window(entity).unwrap();
+	
+	// here we use the `image` crate to load our icon data from a png file
+	// this is not a very bevy-native solution, but it will do
+	let (icon_rgba, icon_width, icon_height) = {
+		let image = image::open("amlogo.png")
+			.expect("Failed to open icon path")
+			.into_rgba8();
+		let (width, height) = image.dimensions();
+		let rgba = image.into_raw();
+		(rgba, width, height)
+	};
+
+	let icon = Icon::from_rgba(icon_rgba, icon_width, icon_height).unwrap();
+
+	primary.set_window_icon(Some(icon));
+	
+    
+
+    
+}
 
 // Server
 fn read_map_system(mut events: EventReader<GameStartEvent>, mut events2: EventWriter<MapReadEvent>) {
