@@ -20,6 +20,8 @@ use bevy_quinnet::{
     shared::ClientId,
 };
 
+use bevy_console::{ConsoleConfiguration, ConsolePlugin, ToggleConsoleKey};
+
 use serde::{Deserialize, Serialize};
 
 enum UnitAction {
@@ -257,6 +259,12 @@ fn main() {
                 ..default()
             }))
 		.add_plugin(QuinnetClientPlugin::default())
+		.add_plugins(ConsolePlugin)
+		.insert_resource(ConsoleConfiguration {
+			// Override config here.
+			keys: vec![ToggleConsoleKey::KeyCode(KeyCode::Backslash)],
+			..Default::default()
+		})
 		.add_state::<GameState>()
 		.add_event::<GameStartEvent>()
 		.add_event::<MapReadEvent>()
@@ -394,6 +402,7 @@ fn main() {
 		//	.chain()
 		//	.run_if(in_state(GameState::LoadMap))
 		//)
+		//.add_systems(Startup, get_toggle_console_key)
 		.run();
 }
 
@@ -1857,6 +1866,19 @@ fn change_state(mut next_state: ResMut<NextState<GameState>>, mut input: ResMut<
 	if input.just_pressed(KeyCode::Space) {
 
 		next_state.set(GameState::Wait);
+	}
+}
+
+// Test
+fn get_toggle_console_key(console_config: Res<ConsoleConfiguration>) {
+	for key in &console_config.keys {
+		
+		match key {
+			ToggleConsoleKey::KeyCode(key_code) => {
+				info!("Console toggle key is: {:?}.", key_code);
+			},
+			_ => { empty_system(); },
+		}
 	}
 }
 
