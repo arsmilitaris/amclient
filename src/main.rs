@@ -5,6 +5,7 @@ use bevy::window::PrimaryWindow;
 use bevy::asset::AssetPath;
 use bevy::winit::WinitWindows;
 use bevy::reflect::std_traits::ReflectDefault;
+use bevy::ecs::schedule::SystemConfig;
 use winit::window::Icon;
 
 use std::fs;
@@ -22,6 +23,8 @@ use bevy_quinnet::{
 };
 
 use bevy_console::{ConsoleConfiguration, ConsolePlugin, ToggleConsoleKey};
+use bevy_console::{reply, AddConsoleCommand, ConsoleCommand,};
+use clap::{Parser};
 
 use bevy_inspector_egui::prelude::*;
 use bevy_inspector_egui::quick::ResourceInspectorPlugin;
@@ -74,6 +77,17 @@ enum ServerMessage {
 	},
 	Wait,
 }
+
+
+// CONSOLE
+
+/// DoNothing command
+#[derive(Parser, ConsoleCommand)]
+#[command(name = "nothing")]
+struct DoNothingCommand {
+    
+}
+
 
 // COMPONENTS
 
@@ -304,6 +318,7 @@ fn main() {
 		.register_type::<UnitActionTuple>()
 		.register_type::<Pos>()
 		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
+		.add_console_command::<DoNothingCommand, _>(do_nothing_command)
 		.add_state::<GameState>()
 		.add_event::<GameStartEvent>()
 		.add_event::<MapReadEvent>()
@@ -1922,6 +1937,17 @@ fn get_toggle_console_key(console_config: Res<ConsoleConfiguration>) {
 			_ => { empty_system(); },
 		}
 	}
+}
+
+// Test
+fn do_nothing_command(mut log: ConsoleCommand<DoNothingCommand>, mut unit_actions_query: Query<&mut UnitActions>) {
+    if let Some(Ok(do_nothing_command)) = log.take() {
+        // handle command
+        for mut unit_actions in unit_actions_query.iter_mut() {
+			unit_actions.unit_actions.push(UnitActionTuple::default());
+			info!("DEBUG: Added DoNothing UnitAction.");
+        }
+    }
 }
 
 fn empty_system() {

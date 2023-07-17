@@ -155,6 +155,7 @@ dependencies = [
  "bevy_console",
  "bevy_egui",
  "bevy_quinnet",
+ "clap",
  "csv",
  "embed-resource",
  "image",
