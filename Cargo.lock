@@ -507,10 +507,9 @@ dependencies = [
 [[package]]
 name = "bevy_console"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "128dcf7633f3ee3d0e64daec637b89443298bb7b5076b6a6948268abfebe2d8c"
 dependencies = [
  "bevy",
+ "bevy-inspector-egui",
  "bevy_console_derive",
  "bevy_egui",
  "clap",
@@ -520,8 +519,6 @@ dependencies = [
 [[package]]
 name = "bevy_console_derive"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bfc5e1962775c30fff70367f6aa7526190a4fe8495a6ae4a3d939bd889fee1e"
 dependencies = [
  "better-bae",
  "proc-macro2",

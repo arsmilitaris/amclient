@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::asset::AssetPath;
 use bevy::winit::WinitWindows;
+use bevy::reflect::std_traits::ReflectDefault;
 use winit::window::Icon;
 
 use std::fs;
@@ -22,8 +23,14 @@ use bevy_quinnet::{
 
 use bevy_console::{ConsoleConfiguration, ConsolePlugin, ToggleConsoleKey};
 
+use bevy_inspector_egui::prelude::*;
+use bevy_inspector_egui::quick::ResourceInspectorPlugin;
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
+
+
 use serde::{Deserialize, Serialize};
 
+#[derive(Reflect)]
 enum UnitAction {
 	Move {
 		destination: Pos,
@@ -31,6 +38,13 @@ enum UnitAction {
 	Talk {
 		message: String,
 	},
+	DoNothing,
+}
+
+impl Default for UnitAction {
+    fn default() -> Self {
+        UnitAction::DoNothing
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -78,11 +92,28 @@ struct TalkAction {
 	message: String,
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect, Default)]
 struct UnitActions {
-	unit_actions: Vec<(UnitAction, f32)>,
+	unit_actions: Vec<UnitActionTuple>,
 	processing_unit_action: bool,
 }
+
+#[derive(Reflect)]
+#[reflect(Default)]
+struct UnitActionTuple(UnitAction, f32);
+
+impl Default for UnitActionTuple {
+    fn default() -> Self {
+        UnitActionTuple(UnitAction::DoNothing, 0.0)
+    }
+}
+
+//impl ReflectDefault for UnitActionTuple {
+//    fn reflect_default() -> Self {
+//        // return the default value of UnitActionTuple
+//        UnitActionTuple(UnitAction::DoNothing, 0.0)
+//    }
+//}
 
 #[derive(Component)]
 struct Cursor {
@@ -109,7 +140,7 @@ struct GameText;
 #[derive(Component)]
 struct Unit;
 
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Reflect)]
 struct Pos {
 	x: usize,
 	y: usize,
@@ -142,7 +173,7 @@ struct WTCurrent { value: usize, }
 #[derive(Component)]
 struct HPMax { value: usize, }
 
-#[derive(Component)]
+#[derive(Component, Reflect, InspectorOptions)]
 struct HPCurrent { value: usize, }
 
 #[derive(Component)]
@@ -265,6 +296,14 @@ fn main() {
 			keys: vec![ToggleConsoleKey::KeyCode(KeyCode::Backslash)],
 			..Default::default()
 		})
+		.add_plugin(WorldInspectorPlugin::new())
+		.register_type::<ConsoleConfiguration>()
+		.register_type::<HPCurrent>()
+		.register_type::<UnitActions>()
+		.register_type::<UnitAction>()
+		.register_type::<UnitActionTuple>()
+		.register_type::<Pos>()
+		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
 		.add_state::<GameState>()
 		.add_event::<GameStartEvent>()
 		.add_event::<MapReadEvent>()
@@ -402,7 +441,7 @@ fn main() {
 		//	.chain()
 		//	.run_if(in_state(GameState::LoadMap))
 		//)
-		//.add_systems(Startup, get_toggle_console_key)
+		.add_systems(Startup, get_toggle_console_key)
 		.run();
 }
 
@@ -1391,7 +1430,7 @@ asset_server: Res<AssetServer>,
 			x: 4,
 			y: 4,
 		},
-		UnitActions { unit_actions: Vec::<(UnitAction, f32)>::new(), processing_unit_action: false, },
+		UnitActions { unit_actions: Default::default(), processing_unit_action: false, },
 		NakedSwordsman {},
 	)).id();
 	
@@ -1570,6 +1609,9 @@ time: Res<Time>,
 					info!("DEBUG: Current unit action is Talk.");
 					commands.entity(entity).insert(TalkAction { message: message.clone(), });
 				},
+				UnitAction::DoNothing => {
+					info!("DEBUG: Current unit action is DoNothing.");
+				}
 			}
 		}
 	}
@@ -1745,12 +1787,12 @@ mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
 ) {
 	//info!("DEBUG: Adding third Move UnitAction...");
 	let (entity, mut unit_actions) = swordsman_query.single_mut();
-	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
-	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
-	unit_actions.unit_actions.push((UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
+	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
+	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
+	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
 	info!("DEBUG: Added Move UnitActions.");
 	
-	unit_actions.unit_actions.push((UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
+	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
 	info!("DEBUG: Added Talk UnitAction.");
 }
 
@@ -1794,7 +1836,7 @@ fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_q
 				unit_sprite : UnitSprite { value: record[19].to_string(), },
 			},
 			Unit,
-			
+			UnitActions { unit_actions: Default::default(), processing_unit_action: false, },
 			Pos {
 				x: record[4].parse().unwrap(),
 				y: record[5].parse().unwrap(),
