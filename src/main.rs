@@ -159,7 +159,8 @@ struct GameText;
 #[derive(Component)]
 struct Unit;
 
-#[derive(Component, Clone, Reflect)]
+#[derive(Component, Clone, Reflect, Default)]
+#[reflect(Default)]
 struct Pos {
 	x: usize,
 	y: usize,
