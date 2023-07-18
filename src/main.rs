@@ -93,6 +93,30 @@ struct DoNothingCommand {
     
 }
 
+/// Talk command
+#[derive(Parser, ConsoleCommand)]
+#[command(name = "talk")]
+struct TalkCommand {
+	/// The `UnitId` of the unit that will say the message.
+	unit_id: usize,
+	
+	/// The message to say.
+	msg: String,
+}
+
+/// Move command
+#[derive(Parser, ConsoleCommand)]
+#[command(name = "move")]
+struct MoveCommand {
+	/// The `UnitId` of the unit that will say the message.
+	unit_id: usize,
+	
+	/// The X map coordinate to move the unit into.
+	x: usize,
+	
+	/// The Y map coordinate to move the unit into.
+	y: usize,
+}
 
 // COMPONENTS
 
@@ -337,6 +361,8 @@ fn main() {
 		.register_type::<Pos>()
 		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
 		.add_console_command::<DoNothingCommand, _>(do_nothing_command)
+		.add_console_command::<TalkCommand, _>(talk_command)
+		.add_console_command::<MoveCommand, _>(move_command)
 		.add_state::<GameState>()
 		.add_event::<GameStartEvent>()
 		.add_event::<MapReadEvent>()
@@ -1979,6 +2005,32 @@ fn do_nothing_command(mut log: ConsoleCommand<DoNothingCommand>, mut unit_action
         for mut unit_actions in unit_actions_query.iter_mut() {
 			unit_actions.unit_actions.push(UnitActionTuple::default());
 			info!("DEBUG: Added DoNothing UnitAction.");
+        }
+    }
+}
+
+// Prototype
+fn talk_command(mut log: ConsoleCommand<TalkCommand>, mut unit_query: Query<(Entity, &UnitId, &mut UnitActions)>) {
+	if let Some(Ok(TalkCommand { unit_id, msg })) = log.take() {
+        // handle command
+        // Find unit with ID = unit_id.
+        for (entity_id, unit_id2, mut unit_actions) in unit_query.iter_mut() {
+			if unit_id2.value == unit_id {
+				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Talk { message: msg.clone() }, 0.0));
+			}
+        }
+    }
+}
+
+// Prototype
+fn move_command(mut log: ConsoleCommand<MoveCommand>, mut unit_query: Query<(Entity, &UnitId, &mut UnitActions)>) {
+	if let Some(Ok(MoveCommand { unit_id, x, y })) = log.take() {
+        // handle command
+        // Find unit with ID = unit_id.
+        for (entity_id, unit_id2, mut unit_actions) in unit_query.iter_mut() {
+			if unit_id2.value == unit_id {
+				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: x, y: y } }, 0.0));
+			}
         }
     }
 }
