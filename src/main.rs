@@ -110,6 +110,8 @@ struct MoveAction {
 struct TalkAction {
 	message: String,
 }
+#[derive(Component)]
+struct DoNothingAction;
 
 #[derive(Component, Reflect, Default)]
 struct UnitActions {
@@ -1642,6 +1644,7 @@ time: Res<Time>,
 				},
 				UnitAction::DoNothing => {
 					info!("DEBUG: Current unit action is DoNothing.");
+					commands.entity(entity).insert(DoNothingAction);
 				}
 			}
 		}
@@ -1762,6 +1765,20 @@ asset_server: Res<AssetServer>,
 		info!("DEBUG: Processed talk action.");
 	}
 }
+
+// Prototype
+fn process_do_nothing_actions(mut commands: Commands, mut unit_query: Query<(Entity, &mut UnitActions, &DoNothingAction)>) {
+	for (entity, mut unit_actions, do_nothing_action) in unit_query.iter_mut() {
+		info!("DEBUG: Processing DoNothing action...");
+		
+		unit_actions.unit_actions.remove(0);
+		unit_actions.processing_unit_action = false;
+		commands.entity(entity).remove::<DoNothingAction>();
+		
+		info!("DEBUG: Processed DoNothing action.");
+	}	
+}
+
 //
 //// Prototype
 //fn second_move_action(
