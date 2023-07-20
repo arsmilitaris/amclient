@@ -161,6 +161,11 @@ impl Default for UnitActionTuple {
 //}
 
 #[derive(Component)]
+struct TalkUI {
+
+}
+
+#[derive(Component)]
 struct Cursor {
 	x: usize,
 	y: usize,
@@ -285,8 +290,10 @@ enum GameState {
 	Loading,
 	LoadingComplete,
 	Battle,
+	Talk,
 	WaitTurn,
 	Wait,
+	LoadAmbush,
 	Ambush,
 }
 
@@ -405,13 +412,13 @@ fn main() {
 		.add_systems(Update, handle_player_turn_server_message
 			.run_if(in_state(GameState::Wait))
 		)
-		.add_systems(OnEnter(GameState::Ambush), setup_grid_system)
-		.add_systems(OnEnter(GameState::Ambush), setup_camera_system)
-		.add_systems(OnEnter(GameState::Ambush), (apply_deferred, setup_text_system)
+		.add_systems(OnEnter(GameState::LoadAmbush), setup_grid_system)
+		.add_systems(OnEnter(GameState::LoadAmbush), setup_camera_system)
+		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, setup_text_system)
 			.chain()
 			.after(setup_grid_system)
 		)
-		.add_systems(OnEnter(GameState::Ambush), (apply_deferred, spawn_units)
+		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, spawn_units)
 			.chain()
 			.after(setup_grid_system)
 		)
@@ -452,6 +459,9 @@ fn main() {
 		.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
 			.chain()
 			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(Update, handle_talk_state
+			.run_if(in_state(GameState::Talk))
 		)
 		//.add_systems(Update, setup_two_seconds_timer
 		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
@@ -1147,7 +1157,7 @@ fn send_start_game_message_system(mut input: ResMut<Input<KeyCode>>, client: Res
 			.connection()
 			.try_send_message(ClientMessage::StartGame);
 	} else if input.just_pressed(KeyCode::M) {
-		next_state.set(GameState::Ambush);
+		next_state.set(GameState::LoadAmbush);
 	}
 }
 
@@ -1738,12 +1748,17 @@ fn process_talk_actions(
 mut commands: Commands,
 mut unit_query: Query<(Entity, &mut UnitActions, &TalkAction)>,
 asset_server: Res<AssetServer>,
+mut next_state: ResMut<NextState<GameState>>,
 ) {
 	
 	
 	for (entity, mut unit_actions, talk_action) in unit_query.iter_mut() {
 		
 		info!("DEBUG: Processing talk action...");
+		
+		info!("DEBUG: Setting GameState to Talk.");
+		next_state.set(GameState::Talk);
+		info!("DEBUG: Set GameState to Talk.");
 		
 		let portrait = asset_server.load("gaul_spearman_portrait.png");
 		
@@ -1758,7 +1773,9 @@ asset_server: Res<AssetServer>,
 				},
 				background_color: BackgroundColor(Color::BLACK),
 				..Default::default()
-			}))
+			},
+			TalkUI {},
+			))
 			.with_children(|parent| {
 			
 				// Add the character portrait
@@ -1785,11 +1802,41 @@ asset_server: Res<AssetServer>,
 					..Default::default()
 				}));
 			});
-		unit_actions.unit_actions.remove(0);
-		unit_actions.processing_unit_action = false;
-		commands.entity(entity).remove::<TalkAction>();
-		info!("DEBUG: Processed talk action.");
+		
 	}
+}
+
+// Prototype
+fn handle_talk_state(
+mouse_button_input: Res<Input<MouseButton>>,
+mut commands: Commands,
+mut unit_query: Query<(Entity, &mut UnitActions, &TalkAction)>,
+talk_ui_query: Query<(Entity, &TalkUI)>,
+mut next_state: ResMut<NextState<GameState>>,
+) {
+	if mouse_button_input.just_pressed(MouseButton::Left) {
+        info!("DEBUG: Left mouse button just pressed.");
+        
+        for (entity, mut unit_actions, talk_action) in unit_query.iter_mut() {
+			
+			// There should be only one unit with a `TalkAction`
+			
+			// Despawn the TalkUI
+			let (ui_entity, talk_ui) = talk_ui_query.single();
+			commands.entity(ui_entity).despawn();
+			
+			// Process unit action.
+			unit_actions.unit_actions.remove(0);
+			unit_actions.processing_unit_action = false;
+			commands.entity(entity).remove::<TalkAction>();
+			info!("DEBUG: Processed talk action.");
+			
+			// Set GameState back to Ambush.
+			info!("DEBUG: Setting GameState to Ambush.");
+			next_state.set(GameState::Ambush);
+			info!("DEBUG: Set GameState to Ambush.");
+        }
+    }
 }
 
 // Prototype
@@ -1871,7 +1918,7 @@ mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
 }
 
 // Client
-fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_query: Query<&mut Map>) {
+fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_query: Query<&mut Map>, mut next_state: ResMut<NextState<GameState>>) {
 	info!("DEBUG: Starting to spawn units...");
 
 	let mut map = &mut map_query.single_mut().map;
@@ -1944,6 +1991,9 @@ fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_q
 	}
 	
 	info!("DEBUG: Finished spawning units.");
+	info!("DEBUG: Setting GameState to Ambush.");
+	next_state.set(GameState::Ambush);
+	info!("DEBUG: Set GameState to Ambush.");
 }
 
 //
