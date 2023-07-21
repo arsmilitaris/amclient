@@ -552,7 +552,7 @@ fn read_map_system(mut events: EventReader<GameStartEvent>, mut events2: EventWr
 	for event in events.iter() {
 		//info!("DEBUG: Reading map file...");
 	
-		let file_contents = fs::read_to_string("src\\map.txt").unwrap();
+		let file_contents = fs::read_to_string("src/map.txt").unwrap();
 		
 		//info!("DEBUG: Read map file.");
 		
@@ -608,7 +608,7 @@ fn setup_map_system(mut events: EventReader<MapReadEvent>, mut events2: EventWri
 					TextBundle::from_section(
 						map[i][j].as_str(),
 						TextStyle {
-							font: asset_server.load("fonts\\FiraSans-Bold.ttf"),
+							font: asset_server.load("fonts/FiraSans-Bold.ttf"),
 							font_size: 80.0,
 							color: Color::WHITE,
 						},
@@ -638,7 +638,7 @@ fn setup_map_system(mut events: EventReader<MapReadEvent>, mut events2: EventWri
 // Server
 fn read_battle_system(mut events: EventReader<MapSetupEvent>, mut events2: EventWriter<UnitsReadEvent>) {
 	for event in events.iter() {
-		let mut rdr = Reader::from_path("src\\the_patrol_ambush_data.csv").unwrap();
+		let mut rdr = Reader::from_path("src/the_patrol_ambush_data.csv").unwrap();
 		let mut records: Vec<StringRecord> = Vec::new();
 		for result in rdr.records(){
 			let record = result.unwrap();
@@ -1923,7 +1923,7 @@ fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_q
 
 	let mut map = &mut map_query.single_mut().map;
 
-	let mut rdr = Reader::from_path("src\\the_patrol_ambush_data.csv").unwrap();
+	let mut rdr = Reader::from_path("src/the_patrol_ambush_data.csv").unwrap();
 	let mut records: Vec<StringRecord> = Vec::new();
 	for result in rdr.records(){
 		let record = result.unwrap();
