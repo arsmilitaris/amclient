@@ -38,10 +38,14 @@ use bevy_log::Rolling;
 
 use serde::{Deserialize, Serialize};
 
+use rand::Rng;
+
 #[derive(Reflect)]
 enum UnitAction {
 	Move {
+		origin: Pos,
 		destination: Pos,
+		timer: Timer,
 	},
 	Talk {
 		message: String,
@@ -127,7 +131,9 @@ struct NakedSwordsman {
 
 #[derive(Component)]
 struct MoveAction {
+	origin: Pos,
 	destination: Pos,
+	timer: Timer,
 }
 
 #[derive(Component)]
@@ -291,6 +297,7 @@ enum GameState {
 	LoadingComplete,
 	Battle,
 	Talk,
+	Move,
 	WaitTurn,
 	Wait,
 	LoadAmbush,
@@ -420,15 +427,28 @@ fn main() {
 		)
 		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, spawn_units)
 			.chain()
-			.after(setup_grid_system)
+			.after(setup_text_system)
 		)
-		.add_systems(Update, z_order_system
-			.run_if(in_state(GameState::Ambush))
-			.run_if(text_already_setup)
+		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_order_system)
+			.chain()
+			.after(setup_text_system)
+		)
+		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_unit_order_system)
+			.after(spawn_units)
+		)
+		.add_systems(Update, z_unit_order_system
+			.run_if(in_state(GameState::Move))
+		)
+		.add_systems(Update, tick_move_timer
+			.run_if(in_state(GameState::Move))
 		)
 		.add_systems(Update, move_camera_system
 			.run_if(in_state(GameState::Ambush))
 		)
+		.add_systems(Update, move_camera_system
+			.run_if(in_state(GameState::Move))
+		)
+		//.add_systems(OnEnter(GameState::Ambush), ars_militaris_demo)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
 		//	.chain()
 		//	.after(setup_text_system)
@@ -455,6 +475,9 @@ fn main() {
 		.add_systems(Update, (apply_deferred, process_move_actions, apply_deferred)
 			.chain()
 			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(Update, handle_move_state
+			.run_if(in_state(GameState::Move))
 		)
 		.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
 			.chain()
@@ -1282,9 +1305,9 @@ fn setup_grid_system(mut commands: Commands) {
 	// Create map.
 	info!("DEBUG: Creating map...");
 	let mut map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>> = Vec::new();
-	for i in 0..30 {
+	for i in 0..20 {
 		let mut map_line: Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)> = Vec::new();
-		for j in 0..30 {
+		for j in 0..20 {
 			map_line.push((1, TileType::Grass, Vec::new(), Vec::new()));
 		}
 		map.push(map_line);
@@ -1379,9 +1402,7 @@ map_query: Query<&Map>,
 				// Order unit.
 				if let Ok(mut unit_transform) = unit_query.get_mut(map[i][j].2[0]) {
 					if let Ok(mut tile_transform) = query.get_mut(map[i][j].3[map[i][j].3.len() - 1]) {
-						unit_transform.translation = tile_transform.translation;
-						unit_transform.translation.y += 100.0;
-						unit_transform.translation.z += 0.0000001;
+						//unit_transform.translation.y += 100.0;
 					}
 					//unit_transform.translation.z = counter + counter_2 + 0.0000001;
 				}
@@ -1392,26 +1413,19 @@ map_query: Query<&Map>,
 
 // Client
 fn z_unit_order_system(
-mut query: Query<&mut Transform, With<Unit>>,
+mut query: Query<&mut Transform, (With<GameText>, Without<Unit>)>,
+mut unit_query: Query<(&mut Transform, &Pos), (With<Unit>, Without<GameText>)>,
 map_query: Query<&Map>,
 ) {
 	let map = &map_query.single().map;
 
-	for i in 0..map.len() {
-		for j in 0..map[i].len() {
-			if map[i][j].2.len() > 0 {
-				// Order unit.
-				if let Ok(mut unit_transform) = query.get_mut(map[i][j].2[0]) {
-					//if let Ok(mut tile_transform) = 
-				}
-				
-				
-			}
-		}
-	}
-
-	for unit_transform in query.iter_mut() {
+	for (mut unit_transform, pos) in unit_query.iter_mut() {
+		// Get the tile the unit is on.
+		//map[pos.x][pos.y]
 		
+		if let Ok(mut tile_transform) = query.get(map[pos.x][pos.y].3[map[pos.x][pos.y].3.len() - 1]) {
+			unit_transform.translation.z = tile_transform.translation.z + 0.0000001;
+		}
 	}
 }
 
@@ -1670,9 +1684,13 @@ time: Res<Time>,
 			let current_unit_action = &unit_actions.unit_actions[0].0;
 		
 			match current_unit_action {
-				UnitAction::Move { destination } => {
+				UnitAction::Move { origin, destination, timer, } => {
 					info!("DEBUG: Current unit action is Move.");
-					commands.entity(entity).insert(MoveAction { destination: destination.clone(), });
+					commands.entity(entity).insert(MoveAction { 
+						origin: origin.clone(),
+						destination: destination.clone(),
+						timer: timer.clone(),
+					});
 				},
 				UnitAction::Talk { message } => {
 					info!("DEBUG: Current unit action is Talk.");
@@ -1715,6 +1733,7 @@ fn process_move_actions(
 mut commands: Commands,
 mut map_query: Query<&mut Map>,
 mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos,  &MoveAction)>,
+mut next_state: ResMut<NextState<GameState>>,
 ) {
 	let map = &mut map_query.single_mut().map;
 	
@@ -1722,24 +1741,103 @@ mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos,  &MoveAction)>,
 		info!("DEBUG: Processing MoveAction...");
 		info!("DEBUG: Move destination is: {}, {}.", move_action.destination.x, move_action.destination.y);
 		
-		// Move unit.
-		if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
-			info!("DEBUG: Couldn't move unit. There's an unit already there.");
-		} else {
-			// Update unit position.
-			
-			map[move_action.destination.x][move_action.destination.y].2.push(entity);
-			map[pos.x][pos.y].2.pop();
-			
-			pos.x = move_action.destination.x;
-			pos.y = move_action.destination.y;
+		// Set GameState to Move
+		info!("DEBUG: Setting GameState to Move...");
+		next_state.set(GameState::Move);
+		info!("DEBUG: Set GameState to Move.");
+		
+		break;
+	}
+}
+
+// Prototype
+fn handle_move_state(
+mut commands: Commands,
+mut map_query: Query<&mut Map>,
+mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &mut MoveAction), Without<GameText>>,
+tile_transform_query: Query<&Transform, (With<GameText>, Without<Unit>)>,
+mut next_state: ResMut<NextState<GameState>>,
+time: Res<Time>,
+) {
+	let map = &mut map_query.single_mut().map;
+
+	if unit_query.iter_mut().len() == 0 {
+		info!("DEBUG: No MoveActions remaining. Setting GameState to Ambush.");
+		next_state.set(GameState::Ambush);
+		info!("DEBUG: No MoveActions remaining. Set GameState to Ambush.");
+	} else {
+	
+		for (entity, mut transform, mut unit_actions, mut pos, mut move_action) in unit_query.iter_mut() {
+			if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
+				info!("DEBUG: Couldn't move unit. There's an unit already there.");
+				unit_actions.processing_unit_action = false;
+				unit_actions.unit_actions.remove(0);
+				commands.entity(entity).remove::<MoveAction>();
+				info!("DEBUG: Processed MoveAction.");
+			} else {
+				
+				if move_action.timer.just_finished() {
+					// Complete processing of MoveAction.
+					
+					info!("DEBUG: Completing processing of MoveAction...");
+					map[move_action.destination.x][move_action.destination.y].2.push(entity);
+					map[pos.x][pos.y].2.pop();
+					
+					pos.x = move_action.destination.x;
+					pos.y = move_action.destination.y;
+					
+					unit_actions.processing_unit_action = false;
+					unit_actions.unit_actions.remove(0);
+					commands.entity(entity).remove::<MoveAction>();
+					info!("DEBUG: Processed MoveAction.");
+					
+	//				// Set GameState back to Ambush
+	//				info!("DEBUG: Setting GameState to Ambush...");
+	//				next_state.set(GameState::Ambush);
+	//				info!("DEBUG: Set GameState to Ambush.");
+				
+				} else {
+					// Move is still in progress, update the unit's position gradually
+					//info!("DEBUG: Move in progress, updating unit position.");
+					//move_action.timer.tick(time.delta());
+					
+					let start_pos = &move_action.origin;
+					let end_pos = &move_action.destination;
+					let progress = move_action.timer.elapsed_secs() / 4.0;
+
+//					// NEED TO GET THE TRANSFORM AT THE START POS.
+//
+//					let new_pos_x = (start_pos.x as f32 * (1.0 - progress) + end_pos.x as f32 * progress) as f32;
+//                    let new_pos_y = (start_pos.y as f32 * (1.0 - progress) + end_pos.y as f32 * progress) as f32;
+//
+//                    // Interpolate the translation between the old and new positions
+//                    transform.translation.x = (new_pos_x * 256.0 / 2.0) - (new_pos_y as f32 * 256.0 / 2.0);
+//                    transform.translation.y = (new_pos_x * 128.0 / 2.0)
+//                        + (new_pos_y * 128.0 / 2.0)
+//                        + (map[end_pos.x][end_pos.y].0 as f32) * 15.0 * (111.0 / (128.0 / 2.0) - 1.0)
+//                        + 100.0;			
+//					
+//					
+					// Get target tile transform.
+					let target_tile_entity = map[end_pos.x][end_pos.y].3[map[end_pos.x][end_pos.y].3.len() - 1];
+					
+					let target_tile_transform = tile_transform_query.get(target_tile_entity).unwrap();
+					
+					transform.translation.x += ((target_tile_transform.translation.x - transform.translation.x) * progress);
+					transform.translation.y += ((target_tile_transform.translation.y - transform.translation.y  + 100.0) * progress);
+				}
+			} 
 		}
-		
-		
-		unit_actions.processing_unit_action = false;
-		unit_actions.unit_actions.remove(0);
-		commands.entity(entity).remove::<MoveAction>();
-		info!("DEBUG: Processed MoveAction.");
+	}
+}
+
+// Prototype
+fn tick_move_timer(
+mut move_action_query: Query<&mut MoveAction>,
+time: Res<Time>
+) {
+	for (mut move_action) in move_action_query.iter_mut() {
+		move_action.timer.tick(time.delta());
 	}
 }
 
@@ -1902,23 +2000,29 @@ fn process_do_nothing_actions(mut commands: Commands, mut unit_query: Query<(Ent
 //	return timers.six_second_timer.just_finished();
 //}
 //
-// Prototype
-fn cutscene_1(mut commands: Commands,
-mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
-) {
-	//info!("DEBUG: Adding third Move UnitAction...");
-	let (entity, mut unit_actions) = swordsman_query.single_mut();
-	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
-	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
-	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
-	info!("DEBUG: Added Move UnitActions.");
-	
-	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
-	info!("DEBUG: Added Talk UnitAction.");
-}
+//// Prototype
+//fn cutscene_1(mut commands: Commands,
+//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
+//) {
+//	//info!("DEBUG: Adding third Move UnitAction...");
+//	let (entity, mut unit_actions) = swordsman_query.single_mut();
+//	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 2, y: 2, } }, 0.0));
+//	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 4, y: 2, } }, 4.0));
+//	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: 6, y: 2, } }, 8.0));
+//	info!("DEBUG: Added Move UnitActions.");
+//	
+//	unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Talk { message: "Lorem ipsum".to_string() }, 12.0));
+//	info!("DEBUG: Added Talk UnitAction.");
+//}
 
 // Client
-fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_query: Query<&mut Map>, mut next_state: ResMut<NextState<GameState>>) {
+fn spawn_units(
+mut commands: Commands,
+asset_server: Res<AssetServer>,
+mut map_query: Query<&mut Map>,
+tile_transform_query: Query<&Transform, With<GameText>>,
+mut next_state: ResMut<NextState<GameState>>,
+) {
 	info!("DEBUG: Starting to spawn units...");
 
 	let mut map = &mut map_query.single_mut().map;
@@ -1978,16 +2082,32 @@ fn spawn_units(mut commands: Commands, asset_server: Res<AssetServer>, mut map_q
 		//let modified_path = asset_path.to_string() + "_east.png";
 		//asset_path = AssetPath::from(modified_path);
 		
-		commands.entity(entity_id).insert(SpriteBundle {
-					texture: asset_server.load(path_string),
-					transform: Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0),
-					..default()
-		},);
+//		commands.entity(entity_id).insert(SpriteBundle {
+//					texture: asset_server.load(path_string),
+//					transform: Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0  * (111.0 / (128.0 / 2.0) - 1.0) + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0),
+//					..default()
+//		},);
+		
+		// Get tile transform.
+		let tile_entity = map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].3[map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].3.len() - 1];
+		
+		if let Ok(tile_transform) = tile_transform_query.get(tile_entity) {
+			let unit_transform = Transform::from_xyz(tile_transform.translation.x, tile_transform.translation.y + 100.0, tile_transform.translation.z + 0.0000001);
+			
+			commands.entity(entity_id).insert(SpriteBundle {
+						texture: asset_server.load(path_string),
+						transform: unit_transform,
+						..default()
+			},);
+		}
+		
 		
 		map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].2.push(entity_id);
 		
 		info!("DEBUG: Unit transform is: {:?}.", Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0));
 		//info!("DEBUG: 
+		
+		//* (111.0 / (128.0 / 2.0) - 1.0)
 	}
 	
 	info!("DEBUG: Finished spawning units.");
@@ -2073,16 +2193,88 @@ fn talk_command(mut log: ConsoleCommand<TalkCommand>, mut unit_query: Query<(Ent
 }
 
 // Prototype
-fn move_command(mut log: ConsoleCommand<MoveCommand>, mut unit_query: Query<(Entity, &UnitId, &mut UnitActions)>) {
+fn move_command(mut log: ConsoleCommand<MoveCommand>, mut unit_query: Query<(Entity, &UnitId, &mut UnitActions, &Pos)>) {
 	if let Some(Ok(MoveCommand { unit_id, x, y })) = log.take() {
         // handle command
         // Find unit with ID = unit_id.
-        for (entity_id, unit_id2, mut unit_actions) in unit_query.iter_mut() {
+        for (entity_id, unit_id2, mut unit_actions, pos) in unit_query.iter_mut() {
 			if unit_id2.value == unit_id {
-				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: Pos { x: x, y: y } }, 0.0));
+				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+					origin: Pos { x: pos.x, y: pos.y, },
+					destination: Pos { x: x, y: y },
+					timer: Timer::from_seconds(4.0, TimerMode::Once),
+				}, 0.0));
 			}
         }
     }
+}
+
+// Prototype
+fn ars_militaris_demo(
+mut map_query: Query<&mut Map>,
+mut units_query: Query<(Entity, &UnitId, &mut UnitActions, &Pos)>,
+mut target_units_query: Query<(Entity, &Pos), With<Unit>>,
+time: Res<Time>,
+) {
+	let map = &map_query.single().map;
+	
+	
+//	let mut rng = rand::thread_rng();
+//	// Compute a random unit.
+//	let random_unit_id = rng.gen_range(0..units_query.iter().len());
+//	
+//	// Find a random unit.
+//	for (entity, unit_id, mut unit_actions, pos) in units_query.iter_mut() {
+//		if (unit_id.value - 1) == random_unit_id {
+//			// Find another unit.
+//			for (target_entity, target_pos) in target_units_query.iter_mut() {
+//				if target_entity != entity {
+//					// Compute the new target position.
+//					let target_pos = Pos { x: pos.x + 1, y: pos.y, };
+//					
+//					// Insert a random Move UnitAction on the first unit.
+//					let mut rng2 = rand::thread_rng();
+//					let random_usize: usize = rng2.gen_range(0..map.len());
+//					
+//					let mut rng3 = rand::thread_rng();
+//					let random_usize2: usize = rng3.gen_range(0..map[0].len());
+//					
+//					// Compute a move of a single tile in a random direction
+//										
+//					unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+//						origin: Pos { x: pos.x, y: pos.y, },
+//						destination: Pos { x: target_pos.x, y: target_pos.y, },
+//						timer: Timer::from_seconds(4.0, TimerMode::Once),
+//					}, (time.elapsed().as_secs_f32()) + 6.0));
+//					
+//	//				// Insert a Move UnitAction on the first unit to move towards the target unit.
+//	//				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move { destination: target_pos, }, 0.0));
+//					break;
+//				} else {
+//					continue;
+//				}			
+//			}
+//		} else {
+//			continue;
+//		}
+//		break;
+//	}
+	
+	// Find a unit with UnitId 1.
+	for (entity, unit_id, mut unit_actions, pos) in units_query.iter_mut() {
+		if unit_id.value == 1 {
+			// Move 1 tile forward.
+			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+						origin: Pos { x: pos.x, y: pos.y, },
+						destination: Pos { x: pos.x + 1, y: pos.y, },
+						timer: Timer::from_seconds(4.0, TimerMode::Once),
+					}, (time.elapsed().as_secs_f32()) + 6.0));
+			
+		} else {
+			continue;
+		}
+		break;
+	}
 }
 
 // Logging

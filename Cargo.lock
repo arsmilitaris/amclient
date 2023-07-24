@@ -162,6 +162,7 @@ dependencies = [
  "csv",
  "embed-resource",
  "image",
+ "rand",
  "serde",
  "tracing",
  "tracing-appender 0.2.0",
