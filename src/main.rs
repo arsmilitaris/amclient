@@ -516,6 +516,9 @@ fn main() {
 		.add_systems(Update, end_turn_single_player
 			.run_if(in_state(TurnState::Turn))
 		)
+		.add_systems(Update, first_ai
+			.run_if(in_state(TurnState::AI))
+		)
 		.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
 		//	.chain()
@@ -1170,13 +1173,14 @@ fn wait_turn_system(mut units: Query<(Entity, &mut WTCurrent, &WTMax, &UnitId, &
 }
 
 // Client
-fn end_turn_single_player(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTCurrent, &WTMax), With<CurrentUnit>>, mut commands: Commands, mut next_state: ResMut<NextState<TurnState>>) {
+fn end_turn_single_player(mut input: ResMut<Input<KeyCode>>, mut units: Query<(Entity, &mut WTCurrent, &WTMax), With<CurrentUnit>>, mut commands: Commands, mut next_state: ResMut<NextState<TurnState>>) {
 	if input.just_pressed(KeyCode::T) {
 		info!("DEBUG: The current unit has ended its turn.");
 		info!("DEBUG: Reseting the unit's WT.");
-		for (mut wt_current, wt_max) in units.iter_mut() {
+		for (entity, mut wt_current, wt_max) in units.iter_mut() {
 			if wt_current.value == 0 {
 				wt_current.value = wt_max.value;
+				commands.entity(entity).remove::<CurrentUnit>();
 				break;
 			}
 		}
@@ -2451,6 +2455,40 @@ mut next_state: ResMut<NextState<GameState>>,
 		next_state.set(GameState::Ambush);
 		info!("DEBUG: Set GameState to Ambush.");
 	}
+}
+
+// Prototype
+fn first_ai(
+mut map_query: Query<&mut Map>,
+mut unit_query: Query<(Entity, &UnitId, &mut UnitActions, &Pos, &mut WTCurrent, &WTMax), With<CurrentUnit>>,
+time: Res<Time>,
+mut commands: Commands,
+mut next_state: ResMut<NextState<TurnState>>,
+) {
+	let map = &map_query.single().map;
+	
+	// Get current unit.
+	if let (entity, unit_id, mut unit_actions, pos, mut wt_current, wt_max) = unit_query.single_mut() {
+		// Insert `Move` `UnitAction`.
+		unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+				origin: Pos { x: pos.x, y: pos.y, },
+				destination: Pos { x: pos.x - 1, y: pos.y, },
+				timer: Timer::from_seconds(4.0, TimerMode::Once),
+			}, 0.0));
+		
+		// End turn.
+		wt_current.value = wt_max.value;
+		
+		commands.entity(entity).remove::<CurrentUnit>();
+		
+		info!("DEBUG: AI has finished its turn.");
+		info!("DEBUG: Setting TurnState to Wait...");
+		next_state.set(TurnState::Wait);
+		info!("DEBUG: Set TurnState to Wait.");
+	}
+	
+	
+	
 }
 
 // Logging
