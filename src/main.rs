@@ -130,6 +130,11 @@ struct NakedSwordsman {
 }
 
 #[derive(Component)]
+struct CurrentUnit {
+
+}
+
+#[derive(Component)]
 struct MoveAction {
 	origin: Pos,
 	destination: Pos,
@@ -312,6 +317,13 @@ enum GameState {
 	SinglePlayerPause,
 }
 
+#[derive(States, Debug, Clone, Eq, PartialEq, Hash, Default)]
+enum TurnState {
+	#[default]
+	Wait,
+	Turn,
+}
+
 // EVENTS
 
 #[derive(Event)]
@@ -335,9 +347,19 @@ struct UnitsGeneratedEvent;
 
 // RESOURCES
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct Game {
 	current_unit: usize,
+	current_player: usize,
+}
+
+impl Default for Game {
+	fn default() -> Self {
+        Game {
+            current_unit: 0,
+            current_player: 1, 
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -391,6 +413,7 @@ fn main() {
 		.add_console_command::<TalkCommand, _>(talk_command)
 		.add_console_command::<MoveCommand, _>(move_command)
 		.add_state::<GameState>()
+		.add_state::<TurnState>()
 		.add_event::<GameStartEvent>()
 		.add_event::<MapReadEvent>()
 		.add_event::<MapSetupEvent>()
@@ -475,6 +498,13 @@ fn main() {
 		.add_systems(Update, single_player_pause)
 		.add_systems(Update, handle_single_player_pause_state
 			.run_if(in_state(GameState::SinglePlayerPause))
+		)
+		.add_systems(Update, wait_turn_system
+			.run_if(in_state(GameState::Ambush))
+			.run_if(not(in_state(TurnState::Turn)))
+		)
+		.add_systems(Update, end_turn_single_player
+			.run_if(in_state(TurnState::Turn))
 		)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
 		//	.chain()
@@ -1085,32 +1115,53 @@ fn move_cursor_system(input: Res<Input<KeyCode>>, mut cursors: Query<&mut Cursor
 	}
 }
 
-// Server
-fn wait_turn_system(mut units: Query<(&mut WTCurrent, &WTMax, &UnitId)>, mut game: ResMut<Game>, mut commands: Commands, client: Res<Client>) {
+// Client
+fn wait_turn_system(mut units: Query<(Entity, &mut WTCurrent, &WTMax, &UnitId, &UnitTeam)>, mut game: ResMut<Game>, mut commands: Commands, mut next_state: ResMut<NextState<TurnState>>) {
 	
 	// Decrease all units WT. If WT equals 0, set the unit as the current unit turn.
-	for (mut wt_current, wt_max, unit_id) in units.iter_mut() {
+	for (entity, mut wt_current, wt_max, unit_id, unit_team) in units.iter_mut() {
 		if wt_current.value == 0 {
-			if game.current_unit == unit_id.value {
-				break;
-			} else {
-				game.current_unit = unit_id.value;
-			}
-			
+			info!("DEBUG: Unit with UnitId {} has WTCurrent of 0.", unit_id.value);
+		
+			game.current_unit = unit_id.value;
 			info!("DEBUG: It is now unit {} turn.", unit_id.value);
-			// Send WaitTurnComplete message.
-			info!("DEBUG: Sending WaitTurnComplete message..."); 
-			client
-				.connection()
-				.try_send_message(ClientMessage::WaitTurnComplete);
-			info!("DEBUG: Sent WaitTurnComplete message.");
 			
-			//info!("DEBUG: Setting GameState to Wait..."); 
-			//commands.insert_resource(NextState(GameState::Wait));
-			//info!("DEBUG: Set GameState to Wait.");
+			game.current_player = unit_team.value;
+			info!("DEBUG: It is now player {} turn.", unit_team.value);
+			
+			commands.entity(entity).insert(CurrentUnit {});
+			
+			if game.current_player == 1 {
+				// Player turn.
+				// Set TurnState to Turn.
+				info!("DEBUG: It is now the player's turn.");
+				info!("DEBUG: Setting TurnState to Turn...");
+				next_state.set(TurnState::Turn);
+				info!("DEBUG: Set TurnState to Turn...");
+			}
+
 		} else {
 			wt_current.value = wt_current.value - 1;
 		}
+	}
+}
+
+// Client
+fn end_turn_single_player(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTCurrent, &WTMax), With<CurrentUnit>>, mut commands: Commands, mut next_state: ResMut<NextState<TurnState>>) {
+	if input.just_pressed(KeyCode::T) {
+		info!("DEBUG: The current unit has ended its turn.");
+		info!("DEBUG: Reseting the unit's WT.");
+		for (mut wt_current, wt_max) in units.iter_mut() {
+			if wt_current.value == 0 {
+				wt_current.value = wt_max.value;
+				break;
+			}
+		}
+		
+		// Set TurnState to Wait.
+		info!("DEBUG: Setting TurnState to Wait...");
+		next_state.set(TurnState::Wait);
+		info!("DEBUG: Set TurnState to Wait.");
 	}
 }
 
@@ -1143,6 +1194,7 @@ fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTC
 fn setup_game_resource_system(mut commands: Commands) {
 	commands.insert_resource(Game {
 		current_unit: 0,
+		current_player: 1,
 	});
 }
 
