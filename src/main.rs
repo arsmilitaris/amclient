@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path};
 use std::fs::File;
 use std::io::Write;
+use std::collections::HashMap;
 
 use csv::Reader;
 use csv::StringRecord;
@@ -322,6 +323,7 @@ enum TurnState {
 	#[default]
 	Wait,
 	Turn,
+	AI,
 }
 
 // EVENTS
@@ -350,16 +352,23 @@ struct UnitsGeneratedEvent;
 #[derive(Resource)]
 struct Game {
 	current_unit: usize,
-	current_player: usize,
+	current_team: usize,
+	players: HashMap<usize, ControlledBy>,
 }
 
 impl Default for Game {
 	fn default() -> Self {
         Game {
             current_unit: 0,
-            current_player: 1, 
+            current_team: 1,
+            players: HashMap::new(), 
         }
     }
+}
+
+enum ControlledBy {
+	Player,
+	AI,
 }
 
 #[derive(Resource, Default)]
@@ -502,10 +511,12 @@ fn main() {
 		.add_systems(Update, wait_turn_system
 			.run_if(in_state(GameState::Ambush))
 			.run_if(not(in_state(TurnState::Turn)))
+			.run_if(not(in_state(TurnState::AI)))
 		)
 		.add_systems(Update, end_turn_single_player
 			.run_if(in_state(TurnState::Turn))
 		)
+		.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
 		//	.chain()
 		//	.after(setup_text_system)
@@ -1126,20 +1137,32 @@ fn wait_turn_system(mut units: Query<(Entity, &mut WTCurrent, &WTMax, &UnitId, &
 			game.current_unit = unit_id.value;
 			info!("DEBUG: It is now unit {} turn.", unit_id.value);
 			
-			game.current_player = unit_team.value;
-			info!("DEBUG: It is now player {} turn.", unit_team.value);
+			game.current_team = unit_team.value;
+			info!("DEBUG: It is now team {} turn.", unit_team.value);
 			
 			commands.entity(entity).insert(CurrentUnit {});
 			
-			if game.current_player == 1 {
-				// Player turn.
-				// Set TurnState to Turn.
-				info!("DEBUG: It is now the player's turn.");
-				info!("DEBUG: Setting TurnState to Turn...");
-				next_state.set(TurnState::Turn);
-				info!("DEBUG: Set TurnState to Turn...");
+			// Find if team is controlled by player.
+			if let Some(player) = game.players.get(&game.current_team) {
+				match player {
+					ControlledBy::Player => {
+						// Player turn.
+						// Set TurnState to Turn.
+						info!("DEBUG: It is now the player's turn.");
+						info!("DEBUG: Setting TurnState to Turn...");
+						next_state.set(TurnState::Turn);
+						info!("DEBUG: Set TurnState to Turn.");
+					},
+					ControlledBy::AI => {
+						// AI turn.
+						// Set TurnState to AI.
+						info!("DEBUG: It is now the AI's turn.");
+						info!("DEBUG: Setting TurnState to AI...");
+						next_state.set(TurnState::AI);
+						info!("DEBUG: Set TurnState to AI.");
+					},
+				}
 			}
-
 		} else {
 			wt_current.value = wt_current.value - 1;
 		}
@@ -1192,9 +1215,14 @@ fn end_turn_system(mut input: ResMut<Input<KeyCode>>, mut units: Query<(&mut WTC
 
 // Client
 fn setup_game_resource_system(mut commands: Commands) {
+	let mut players = HashMap::new();
+	players.insert(1, ControlledBy::Player);
+	players.insert(2, ControlledBy::AI);
+	
 	commands.insert_resource(Game {
 		current_unit: 0,
-		current_player: 1,
+		current_team: 1,
+		players: players,
 	});
 }
 
