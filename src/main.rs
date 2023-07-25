@@ -206,6 +206,13 @@ struct Pos {
 #[derive(Component, Clone, Serialize, Deserialize)]
 struct UnitId { value: usize, }
 
+impl Default for UnitId {
+	fn default() -> Self {
+        UnitId {
+            value: 1,
+        }
+    }
+}
 #[derive(Component)]
 struct UnitTeam { value: usize, }
 
@@ -302,6 +309,7 @@ enum GameState {
 	Wait,
 	LoadAmbush,
 	Ambush,
+	SinglePlayerPause,
 }
 
 // EVENTS
@@ -335,6 +343,11 @@ struct Game {
 #[derive(Resource, Default)]
 struct ClientData {
 	client_id: ClientId,
+}
+
+#[derive(Resource, Default)]
+struct DemoData {
+	current_unit: UnitId,
 }
 
 // Client & Server
@@ -385,6 +398,7 @@ fn main() {
 		.add_event::<UnitsGeneratedEvent>()
 		.init_resource::<Game>()
 		.init_resource::<ClientData>()
+		.init_resource::<DemoData>()
 		.add_systems(Startup, set_window_icon)
 		.add_systems(OnEnter(GameState::MainMenu),
 			(start_connection, send_get_client_id_message)
@@ -436,8 +450,17 @@ fn main() {
 		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_unit_order_system)
 			.after(spawn_units)
 		)
+//		.add_systems(Update, z_order_system
+//			.run_if(in_state(GameState::Move))
+//		)
+//		.add_systems(Update, z_unit_order_system
+//			.run_if(in_state(GameState::Move))
+//		)
+		.add_systems(Update, z_order_system
+			.run_if(in_state(GameState::Ambush))
+		)
 		.add_systems(Update, z_unit_order_system
-			.run_if(in_state(GameState::Move))
+			.run_if(in_state(GameState::Ambush))
 		)
 		.add_systems(Update, tick_move_timer
 			.run_if(in_state(GameState::Move))
@@ -449,6 +472,10 @@ fn main() {
 			.run_if(in_state(GameState::Move))
 		)
 		//.add_systems(OnEnter(GameState::Ambush), ars_militaris_demo)
+		.add_systems(Update, single_player_pause)
+		.add_systems(Update, handle_single_player_pause_state
+			.run_if(in_state(GameState::SinglePlayerPause))
+		)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
 		//	.chain()
 		//	.after(setup_text_system)
@@ -1424,7 +1451,7 @@ map_query: Query<&Map>,
 		//map[pos.x][pos.y]
 		
 		if let Ok(mut tile_transform) = query.get(map[pos.x][pos.y].3[map[pos.x][pos.y].3.len() - 1]) {
-			unit_transform.translation.z = tile_transform.translation.z + 0.0000001;
+			unit_transform.translation.z = tile_transform.translation.z + 0.00000001;
 		}
 	}
 }
@@ -1805,6 +1832,8 @@ time: Res<Time>,
 					let end_pos = &move_action.destination;
 					let progress = move_action.timer.elapsed_secs() / 4.0;
 
+					
+
 //					// NEED TO GET THE TRANSFORM AT THE START POS.
 //
 //					let new_pos_x = (start_pos.x as f32 * (1.0 - progress) + end_pos.x as f32 * progress) as f32;
@@ -1825,6 +1854,26 @@ time: Res<Time>,
 					
 					transform.translation.x += ((target_tile_transform.translation.x - transform.translation.x) * progress);
 					transform.translation.y += ((target_tile_transform.translation.y - transform.translation.y  + 100.0) * progress);
+					
+
+
+					
+//					// To fix bug with z-ordering when the unit is moving.
+//					// ATTEMPT#1:
+//					transform.translation.z = target_tile_transform.translation.z + 0.00000001;
+
+					// ATTEMPT#2:
+					// The correct z-order depends on the tile the unit is moving to.
+					if end_pos.x > start_pos.x {
+						
+					} else if end_pos.x < start_pos.x {
+						transform.translation.z = target_tile_transform.translation.z  + 0.00000001;
+					} else if end_pos.y < start_pos.y {
+						transform.translation.z = target_tile_transform.translation.z  + 0.00000001;
+					} else if end_pos.y > start_pos.y {
+					
+					}
+					
 				}
 			} 
 		}
@@ -2092,7 +2141,7 @@ mut next_state: ResMut<NextState<GameState>>,
 		let tile_entity = map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].3[map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].3.len() - 1];
 		
 		if let Ok(tile_transform) = tile_transform_query.get(tile_entity) {
-			let unit_transform = Transform::from_xyz(tile_transform.translation.x, tile_transform.translation.y + 100.0, tile_transform.translation.z + 0.0000001);
+			let unit_transform = Transform::from_xyz(tile_transform.translation.x, tile_transform.translation.y + 100.0, tile_transform.translation.z + 0.00000001);
 			
 			commands.entity(entity_id).insert(SpriteBundle {
 						texture: asset_server.load(path_string),
@@ -2214,10 +2263,10 @@ fn ars_militaris_demo(
 mut map_query: Query<&mut Map>,
 mut units_query: Query<(Entity, &UnitId, &mut UnitActions, &Pos)>,
 mut target_units_query: Query<(Entity, &Pos), With<Unit>>,
+mut demo_data: ResMut<DemoData>,
 time: Res<Time>,
 ) {
 	let map = &map_query.single().map;
-	
 	
 //	let mut rng = rand::thread_rng();
 //	// Compute a random unit.
@@ -2260,20 +2309,67 @@ time: Res<Time>,
 //		break;
 //	}
 	
-	// Find a unit with UnitId 1.
+//	// Find a unit with UnitId 1.
+//	for (entity, unit_id, mut unit_actions, pos) in units_query.iter_mut() {
+//		if unit_id.value == 1 {
+//			// Move 1 tile forward.
+//			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+//						origin: Pos { x: pos.x, y: pos.y, },
+//						destination: Pos { x: pos.x + 1, y: pos.y, },
+//						timer: Timer::from_seconds(4.0, TimerMode::Once),
+//					}, (time.elapsed().as_secs_f32()) + 6.0));
+//			
+//		} else {
+//			continue;
+//		}
+//		break;
+//	}
+
+	// Get the current unit and make a `Move` `UnitAction` towards its target.
 	for (entity, unit_id, mut unit_actions, pos) in units_query.iter_mut() {
-		if unit_id.value == 1 {
-			// Move 1 tile forward.
+		if unit_id.value == demo_data.current_unit.value {
 			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
-						origin: Pos { x: pos.x, y: pos.y, },
-						destination: Pos { x: pos.x + 1, y: pos.y, },
-						timer: Timer::from_seconds(4.0, TimerMode::Once),
-					}, (time.elapsed().as_secs_f32()) + 6.0));
+				origin: Pos { x: pos.x, y: pos.y, },
+				destination: Pos { x: pos.x + 1, y: pos.y, },
+				timer: Timer::from_seconds(4.0, TimerMode::Once),
+			}, (time.elapsed().as_secs_f32()) + 6.0));
 			
+			// Set the next current unit.
+			if demo_data.current_unit.value == units_query.iter_mut().len() {
+				demo_data.current_unit.value = 1;
+			} else {
+				demo_data.current_unit.value += 1;
+			}
 		} else {
 			continue;
 		}
 		break;
+	}
+}
+
+// Prototype
+fn single_player_pause(
+mut input: ResMut<Input<KeyCode>>,
+mut next_state: ResMut<NextState<GameState>>,
+) {
+	if input.just_pressed(KeyCode::F3) {
+		info!("DEBUG: Pausing the game...");
+		info!("DEBUG: Setting GameState to SinglePlayerPause...");
+		next_state.set(GameState::SinglePlayerPause);
+		info!("DEBUG: Set GameState to SinglePlayerPause.");
+	}
+}
+
+// Prototype
+fn handle_single_player_pause_state(
+mut input: ResMut<Input<KeyCode>>,
+mut next_state: ResMut<NextState<GameState>>,
+) {
+	if input.just_pressed(KeyCode::F3) {
+		info!("DEBUG: Unpausing the game...");
+		info!("DEBUG: Setting GameState to Ambush...");
+		next_state.set(GameState::Ambush);
+		info!("DEBUG: Set GameState to Ambush.");
 	}
 }
 
