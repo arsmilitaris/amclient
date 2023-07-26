@@ -302,7 +302,7 @@ struct UnitAttributes {
 
 // STATES
 
-#[derive(States, Debug, Clone, Eq, PartialEq, Hash, Default)]
+#[derive(Reflect, States, Debug, Clone, Eq, PartialEq, Hash, Default)]
 enum GameState {
 	#[default]
 	MainMenu,
@@ -318,7 +318,7 @@ enum GameState {
 	SinglePlayerPause,
 }
 
-#[derive(States, Debug, Clone, Eq, PartialEq, Hash, Default)]
+#[derive(Reflect, States, Debug, Clone, Eq, PartialEq, Hash, Default)]
 enum TurnState {
 	#[default]
 	Wait,
@@ -418,6 +418,8 @@ fn main() {
 		.register_type::<UnitActionTuple>()
 		.register_type::<Pos>()
 		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
+		.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default())
+		.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default())
 		.add_console_command::<DoNothingCommand, _>(do_nothing_command)
 		.add_console_command::<TalkCommand, _>(talk_command)
 		.add_console_command::<MoveCommand, _>(move_command)
