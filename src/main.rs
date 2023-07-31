@@ -500,6 +500,15 @@ fn main() {
 		.add_systems(Update, z_unit_order_system
 			.run_if(in_state(GameState::Ambush))
 		)
+		.add_systems(Update, position_cursor
+			.run_if(in_state(TurnState::Turn))
+		)
+		.add_systems(OnEnter(GameState::LoadAmbush), init_cursor_system)
+		.add_systems(OnEnter(TurnState::Turn), setup_cursor_system_2)
+		.add_systems(OnExit(TurnState::Turn), hide_cursor)
+		.add_systems(Update, move_cursor_2
+			.run_if(in_state(TurnState::Turn))
+		)
 		.add_systems(Update, tick_move_timer
 			.run_if(in_state(GameState::Move))
 		)
@@ -535,10 +544,10 @@ fn main() {
 		//	//.after(spawn_gaul_warrior)
 		//	.after(setup_text_system)
 		//)
-		.add_systems(Update, move_gaul_warrior
-			.run_if(in_state(GameState::Ambush))
-			//.run_if(warrior_already_spawned)
-		)
+//		.add_systems(Update, move_gaul_warrior
+//			.run_if(in_state(GameState::Ambush))
+//			//.run_if(warrior_already_spawned)
+//		)
 		.add_systems(Update, (process_unit_actions, apply_deferred)
 			.chain()
 			.run_if(in_state(GameState::Ambush))
@@ -824,11 +833,17 @@ fn place_units_on_map_system(mut events: EventReader<UnitsGeneratedEvent>, unit_
 }
 
 // Client
-fn init_cursor_system(mut commands: Commands) {
-	commands.spawn(Cursor {
-		x: 0,
-		y: 0,
-	});
+fn init_cursor_system(mut commands: Commands, asset_server: Res<AssetServer>,) {
+	commands.spawn((
+		Cursor {
+			x: 0,
+			y: 0,
+		},
+		SpriteBundle {
+			texture: asset_server.load("cursor.png"),
+			visibility: Visibility::Hidden,
+			..default()
+		}));
 }
 
 // Client & Server
@@ -870,6 +885,34 @@ fn setup_cursor_system(mut commands: Commands, mut tiles: Query<(&Tile, &Pos, &m
 					}
 				}
 			}
+		}
+	}
+}
+
+// Client
+fn setup_cursor_system_2(
+mut commands: Commands,
+mut tiles: Query<(Entity, &Pos), With<GameText>>,
+game: Res<Game>,
+units: Query<(&UnitId, &Pos)>,
+mut cursor_query: Query<(Entity, &mut Cursor, &mut Visibility)>,
+asset_server: Res<AssetServer>,
+) {
+	
+	info!("DEBUG: setup_cursor_system_2 running...");
+	// Setup cursor.
+	let (entity, mut cursor, mut visibility) = cursor_query.single_mut();
+	
+	// Find the tile the current unit is on.
+	for (unit_id, pos) in units.iter() {
+		if unit_id.value == game.current_unit {
+			// Set the cursor to the current unit tile.
+			cursor.x = pos.x;
+			cursor.y = pos.y;
+			
+			// Make the cursor sprite visible.
+			*visibility = Visibility::Visible;
+			
 		}
 	}
 }
@@ -1133,6 +1176,89 @@ fn move_cursor_system(input: Res<Input<KeyCode>>, mut cursors: Query<&mut Cursor
 			
 		}
 	}
+}
+
+// Prototype
+fn move_cursor_2(
+map_query: Query<&Map>,
+mut cursor_query: Query<(&mut Cursor)>,
+mut input: ResMut<Input<KeyCode>>,
+) {
+	let mut cursor = cursor_query.single_mut();
+	let map = &map_query.single().map;
+	if input.just_pressed(KeyCode::W) {
+		if cursor.y == map[0].len() - 1 {
+			info!("DEBUG: You can't move the cursor there.");
+		} else {		
+			// Move Cursor North.
+			cursor.y += 1;
+		}
+	}
+
+	if input.just_pressed(KeyCode::A) {
+		
+		if cursor.x == 0 {
+			info!("DEBUG: You can't move the cursor there.");
+		} else {		
+			// Move Cursor West.
+			cursor.x -= 1;
+		}
+	}
+	
+	if input.just_pressed(KeyCode::S) {
+		if cursor.y == 0 {
+			info!("DEBUG: You can't move the cursor there.");
+		} else {		
+			// Move Cursor South.
+			cursor.y -= 1;
+		}
+	}
+	
+	if input.just_pressed(KeyCode::D) {
+		if cursor.x == map.len() - 1 {
+			info!("DEBUG: You can't move the cursor there.");
+		} else {		
+			// Move Cursor East.
+			cursor.x += 1;
+		}
+	}
+}
+
+// Prototype
+fn position_cursor(
+map_query: Query<&Map>,
+mut cursor_query: Query<(&Cursor, &mut Transform), Without<GameText>>,
+tiles_query: Query<&Transform, With<GameText>>,
+) {
+	// Get the cursor.
+	let (cursor, mut transform) = cursor_query.single_mut();
+	
+	// Get the map.
+	let map = &map_query.single().map;
+	
+	// Get the transform of the tile the unit is on.
+	let tile_entity = map[cursor.x][cursor.y].3[map[cursor.x][cursor.y].3.len() - 1];
+	if let Ok(tile_transform) = tiles_query.get(tile_entity) {
+		// Set the transform of the cursor to be the same as the tile's transform.
+		transform.translation = tile_transform.translation.clone();
+		
+		// Add the required Y modifier to ensure the correct placement
+		// at the center of the tile.
+		transform.translation.y += 16.0;
+		// Add the required Z modifier to ensure the correct Z-ordering.
+		// This modifier is equal to half the unit's Z modifier,
+		// so that the cursor will be placed above the tile but below the unit.
+		transform.translation.z += 0.000000005;
+	}
+}
+
+fn hide_cursor(
+mut commands: Commands,
+mut cursor_query: Query<(Entity, &mut Visibility), With<Cursor>>,
+) {
+	let (entity, mut visibility) = cursor_query.single();
+	
+	visibility = &Visibility::Hidden;
 }
 
 // Client
