@@ -88,6 +88,33 @@ enum ServerMessage {
 	Wait,
 }
 
+#[derive(Reflect)]
+#[reflect(Default)]
+enum Direction {
+	East,
+	South,
+	West,
+	North,
+}
+
+impl Direction {
+	fn from_string(dir_string: String) -> Direction {
+		
+		match dir_string.as_str() {
+			"East" => Direction::East,
+			"South" => Direction::South,
+			"West" => Direction::West,
+			"North" => Direction::North,
+			_ => panic!("Invalid Direction string: {}", dir_string),
+		}
+	}
+}
+
+impl Default for Direction {
+	fn default() -> Self {
+        Direction::East
+    }
+}
 
 // CONSOLE
 
@@ -281,6 +308,10 @@ struct LUK { value: usize, }
 #[derive(Component)]
 struct UnitSprite { value: String, }
 
+#[derive(Component, Default, Reflect)]
+#[reflect(Default)]
+struct DIR { direction: Direction, }
+
 #[derive(Bundle)]
 struct UnitAttributes {
 	unit_id: UnitId,
@@ -303,6 +334,7 @@ struct UnitAttributes {
 	dex: DEX,
 	luk: LUK,
 	unit_sprite: UnitSprite,
+	dir: DIR,
 }
 
 // STATES
@@ -424,6 +456,7 @@ fn main() {
 		.register_type::<UnitAction>()
 		.register_type::<UnitActionTuple>()
 		.register_type::<Pos>()
+		.register_type::<DIR>()
 		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
 		.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default())
 		.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default())
@@ -493,6 +526,7 @@ fn main() {
 		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_unit_order_system)
 			.after(spawn_units)
 		)
+		.add_systems(OnExit(GameState::LoadAmbush), handle_unit_directions)
 //		.add_systems(Update, z_order_system
 //			.run_if(in_state(GameState::Move))
 //		)
@@ -504,6 +538,9 @@ fn main() {
 		)
 		.add_systems(Update, z_unit_order_system
 			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(Update, handle_unit_directions
+			.run_if(in_state(GameState::Move))
 		)
 		.add_systems(Update, position_cursor
 			.run_if(in_state(TurnState::Turn))
@@ -796,6 +833,7 @@ fn generate_units_system(mut events: EventReader<UnitsReadEvent>, mut events2: E
 					dex : DEX { value: record[17].parse().unwrap(), },
 					luk : LUK { value: record[18].parse().unwrap(), },
 					unit_sprite : UnitSprite { value: record[19].to_string(), },
+					dir: DIR { direction: Direction::from_string(record[20].to_string()), },
 				},
 				Unit,
 			));
@@ -2031,7 +2069,7 @@ mut next_state: ResMut<NextState<GameState>>,
 fn handle_move_state(
 mut commands: Commands,
 mut map_query: Query<&mut Map>,
-mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &MoveAction, &mut MoveActions), Without<GameText>>,
+mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &MoveAction, &mut MoveActions, &mut DIR), Without<GameText>>,
 tile_transform_query: Query<&Transform, (With<GameText>, Without<Unit>)>,
 mut next_state: ResMut<NextState<GameState>>,
 time: Res<Time>,
@@ -2045,7 +2083,7 @@ time: Res<Time>,
 		info!("DEBUG: No MoveActions remaining. Set GameState to Ambush.");
 	} else {
 	
-		for (entity, mut transform, mut unit_actions, mut pos, move_action_component, mut move_actions) in unit_query.iter_mut() {
+		for (entity, mut transform, mut unit_actions, mut pos, move_action_component, mut move_actions, mut dir) in unit_query.iter_mut() {
 			
 			if move_actions.move_actions.len() == 0 {
 				// This unit has completed its movement.
@@ -2092,6 +2130,19 @@ time: Res<Time>,
 						
 						let start_pos = &move_action.origin;
 						let end_pos = &move_action.destination;
+						
+						// Set the unit's direction.
+						if end_pos.x < start_pos.x {
+							dir.direction = Direction::West;
+						} else if end_pos.x > start_pos.x {
+							dir.direction = Direction::East;
+						}
+						if end_pos.y < start_pos.y {
+							dir.direction = Direction::South;
+						} else if end_pos.y > start_pos.y {
+							dir.direction = Direction::North;
+						}
+						
 						
 						let progress = move_action.timer.elapsed_secs() / 2.0;
 
@@ -2374,6 +2425,7 @@ mut next_state: ResMut<NextState<GameState>>,
 				dex : DEX { value: record[17].parse().unwrap(), },
 				luk : LUK { value: record[18].parse().unwrap(), },
 				unit_sprite : UnitSprite { value: record[19].to_string(), },
+				dir: DIR { direction: Direction::from_string(record[20].to_string()), },
 			},
 			Unit,
 			UnitActions { unit_actions: Default::default(), processing_unit_action: false, },
@@ -2672,6 +2724,37 @@ mut next_state: ResMut<NextState<TurnState>>,
 	
 	
 	
+}
+
+// Prototype
+fn handle_unit_directions(
+mut units_query: Query<(Entity, &mut Handle<Image>, &DIR, &UnitSprite)>,
+asset_server: Res<AssetServer>,
+) {
+	for (entity, mut sprite, dir, unit_sprite) in units_query.iter_mut() {
+		match dir.direction {
+			Direction::East => {
+				let mut sprite_path = unit_sprite.value.clone();
+				sprite_path.push_str("_east.png");
+				*sprite = asset_server.load(&*sprite_path);
+			},
+			Direction::South => {
+				let mut sprite_path = &mut unit_sprite.value.clone();
+				sprite_path.push_str("_south.png");
+				*sprite = asset_server.load(&*sprite_path);
+			},
+			Direction::West => {
+				let mut sprite_path = &mut unit_sprite.value.clone();
+				sprite_path.push_str("_west.png");
+				*sprite = asset_server.load(&*sprite_path);
+			},
+			Direction::North => {
+				let mut sprite_path = &mut unit_sprite.value.clone();
+				sprite_path.push_str("_north.png");
+				*sprite = asset_server.load(&*sprite_path);
+			},
+		}
+	}
 }
 
 use pathfinding::prelude::astar;
