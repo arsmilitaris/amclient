@@ -136,6 +136,11 @@ struct CurrentUnit {
 }
 
 #[derive(Component)]
+struct MoveActions {
+	move_actions: Vec<MoveAction>,
+}
+
+#[derive(Component)]
 struct MoveAction {
 	origin: Pos,
 	destination: Pos,
@@ -202,7 +207,7 @@ struct GameText;
 #[derive(Component)]
 struct Unit;
 
-#[derive(Component, Clone, Reflect, Default)]
+#[derive(Component, Clone, Reflect, Default, Eq, PartialEq, Hash, Copy)]
 #[reflect(Default)]
 struct Pos {
 	x: usize,
@@ -562,7 +567,8 @@ fn main() {
 			.chain()
 			.run_if(in_state(GameState::Ambush))
 		)
-		.add_systems(Update, handle_move_state
+		.add_systems(Update, (apply_deferred, handle_move_state, apply_deferred)
+			.chain()
 			.run_if(in_state(GameState::Move))
 		)
 		.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
@@ -1971,18 +1977,46 @@ time: Res<Time>,
 //	}
 //}
 //
+
 // Prototype
 fn process_move_actions(
 mut commands: Commands,
 mut map_query: Query<&mut Map>,
-mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos,  &MoveAction)>,
+mut unit_query: Query<(Entity, &mut UnitActions, &mut Pos, &MoveAction, &mut MoveActions)>,
 mut next_state: ResMut<NextState<GameState>>,
 ) {
 	let map = &mut map_query.single_mut().map;
 	
-	for (entity, mut unit_actions, mut pos, move_action) in unit_query.iter_mut() {
+	for (entity, mut unit_actions, mut pos, move_action, mut move_actions) in unit_query.iter_mut() {
 		info!("DEBUG: Processing MoveAction...");
 		info!("DEBUG: Move destination is: {}, {}.", move_action.destination.x, move_action.destination.y);
+		
+		// Calculate path.
+		let path = find_path(map.to_vec(), move_action.origin, move_action.destination);
+		if let Some(mut path) = path {
+			
+			let origin_backup: Pos = path[0];
+			
+			// Remove the first entry because it is the tile the unit is on.
+			path.remove(0);
+			
+			for i in 0..path.len() {
+				info!("DEBUG: Path step is {}, {}.", path[i].x, path[i].y);
+				// Create MoveAction
+				if i == 0 {
+					let new_move_action = MoveAction { origin: origin_backup, destination: path[i], timer: Timer::from_seconds(2.0, TimerMode::Once)};
+					// Add MoveAction to MoveActions component.
+					move_actions.move_actions.push(new_move_action);
+				} else {
+					let new_move_action = MoveAction { origin: path[i - 1], destination: path[i], timer: Timer::from_seconds(2.0, TimerMode::Once)};
+					// Add MoveAction to MoveActions component.
+					move_actions.move_actions.push(new_move_action);
+				}
+			}
+		}
+		
+//		// Remove the MoveAction component.
+//		commands.entity(entity).remove::<MoveAction>();
 		
 		// Set GameState to Move
 		info!("DEBUG: Setting GameState to Move...");
@@ -1997,12 +2031,13 @@ mut next_state: ResMut<NextState<GameState>>,
 fn handle_move_state(
 mut commands: Commands,
 mut map_query: Query<&mut Map>,
-mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &mut MoveAction), Without<GameText>>,
+mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &MoveAction, &mut MoveActions), Without<GameText>>,
 tile_transform_query: Query<&Transform, (With<GameText>, Without<Unit>)>,
 mut next_state: ResMut<NextState<GameState>>,
 time: Res<Time>,
 ) {
-	let map = &mut map_query.single_mut().map;
+	let mut map_component = map_query.single_mut();
+	let mut map = &mut map_component.map;
 
 	if unit_query.iter_mut().len() == 0 {
 		info!("DEBUG: No MoveActions remaining. Setting GameState to Ambush.");
@@ -2010,99 +2045,114 @@ time: Res<Time>,
 		info!("DEBUG: No MoveActions remaining. Set GameState to Ambush.");
 	} else {
 	
-		for (entity, mut transform, mut unit_actions, mut pos, mut move_action) in unit_query.iter_mut() {
-			if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
-				info!("DEBUG: Couldn't move unit. There's an unit already there.");
+		for (entity, mut transform, mut unit_actions, mut pos, move_action_component, mut move_actions) in unit_query.iter_mut() {
+			
+			if move_actions.move_actions.len() == 0 {
+				// This unit has completed its movement.
 				unit_actions.processing_unit_action = false;
 				unit_actions.unit_actions.remove(0);
 				commands.entity(entity).remove::<MoveAction>();
 				info!("DEBUG: Processed MoveAction.");
 			} else {
+				let move_action = &move_actions.move_actions[0];
 				
-				if move_action.timer.just_finished() {
-					// Complete processing of MoveAction.
-					
-					info!("DEBUG: Completing processing of MoveAction...");
-					map[move_action.destination.x][move_action.destination.y].2.push(entity);
-					map[pos.x][pos.y].2.pop();
-					
-					pos.x = move_action.destination.x;
-					pos.y = move_action.destination.y;
-					
+				if map[move_action.destination.x][move_action.destination.y].2.len() > 0 {
+					info!("DEBUG: Couldn't move unit. There's an unit already there.");
 					unit_actions.processing_unit_action = false;
 					unit_actions.unit_actions.remove(0);
 					commands.entity(entity).remove::<MoveAction>();
+					move_actions.move_actions.truncate(0);
 					info!("DEBUG: Processed MoveAction.");
-					
-	//				// Set GameState back to Ambush
-	//				info!("DEBUG: Setting GameState to Ambush...");
-	//				next_state.set(GameState::Ambush);
-	//				info!("DEBUG: Set GameState to Ambush.");
-				
 				} else {
-					// Move is still in progress, update the unit's position gradually
-					//info!("DEBUG: Move in progress, updating unit position.");
-					//move_action.timer.tick(time.delta());
-					
-					let start_pos = &move_action.origin;
-					let end_pos = &move_action.destination;
-					let progress = move_action.timer.elapsed_secs() / 4.0;
-
-					
-
-//					// NEED TO GET THE TRANSFORM AT THE START POS.
-//
-//					let new_pos_x = (start_pos.x as f32 * (1.0 - progress) + end_pos.x as f32 * progress) as f32;
-//                    let new_pos_y = (start_pos.y as f32 * (1.0 - progress) + end_pos.y as f32 * progress) as f32;
-//
-//                    // Interpolate the translation between the old and new positions
-//                    transform.translation.x = (new_pos_x * 256.0 / 2.0) - (new_pos_y as f32 * 256.0 / 2.0);
-//                    transform.translation.y = (new_pos_x * 128.0 / 2.0)
-//                        + (new_pos_y * 128.0 / 2.0)
-//                        + (map[end_pos.x][end_pos.y].0 as f32) * 15.0 * (111.0 / (128.0 / 2.0) - 1.0)
-//                        + 100.0;			
-//					
-//					
-					// Get target tile transform.
-					let target_tile_entity = map[end_pos.x][end_pos.y].3[map[end_pos.x][end_pos.y].3.len() - 1];
-					
-					let target_tile_transform = tile_transform_query.get(target_tile_entity).unwrap();
-					
-					transform.translation.x += ((target_tile_transform.translation.x - transform.translation.x) * progress);
-					transform.translation.y += ((target_tile_transform.translation.y - transform.translation.y  + 100.0) * progress);
-					
-
-
-					
-//					// To fix bug with z-ordering when the unit is moving.
-//					// ATTEMPT#1:
-//					transform.translation.z = target_tile_transform.translation.z + 0.00000001;
-
-					// ATTEMPT#2:
-					// The correct z-order depends on the tile the unit is moving to.
-					if end_pos.x > start_pos.x {
+					if move_action.timer.just_finished() {
+						// Complete processing of MoveAction.
 						
-					} else if end_pos.x < start_pos.x {
-						transform.translation.z = target_tile_transform.translation.z  + 0.00000001;
-					} else if end_pos.y < start_pos.y {
-						transform.translation.z = target_tile_transform.translation.z  + 0.00000001;
-					} else if end_pos.y > start_pos.y {
+						info!("DEBUG: Completing processing of MoveAction...");
+						map[move_action.destination.x][move_action.destination.y].2.push(entity);
+						map[pos.x][pos.y].2.pop();
+						
+						pos.x = move_action.destination.x;
+						pos.y = move_action.destination.y;
+						
+						
+						
+						move_actions.move_actions.remove(0);
+						info!("DEBUG: Processed MoveAction.");
+						
+		//				// Set GameState back to Ambush
+		//				info!("DEBUG: Setting GameState to Ambush...");
+		//				next_state.set(GameState::Ambush);
+		//				info!("DEBUG: Set GameState to Ambush.");
 					
+					} else {
+						// Move is still in progress, update the unit's position gradually
+						//info!("DEBUG: Move in progress, updating unit position.");
+						//move_action.timer.tick(time.delta());
+											
+						
+						let start_pos = &move_action.origin;
+						let end_pos = &move_action.destination;
+						
+						let progress = move_action.timer.elapsed_secs() / 2.0;
+
+						
+
+	//					// NEED TO GET THE TRANSFORM AT THE START POS.
+	//
+	//					let new_pos_x = (start_pos.x as f32 * (1.0 - progress) + end_pos.x as f32 * progress) as f32;
+	//                    let new_pos_y = (start_pos.y as f32 * (1.0 - progress) + end_pos.y as f32 * progress) as f32;
+	//
+	//                    // Interpolate the translation between the old and new positions
+	//                    transform.translation.x = (new_pos_x * 256.0 / 2.0) - (new_pos_y as f32 * 256.0 / 2.0);
+	//                    transform.translation.y = (new_pos_x * 128.0 / 2.0)
+	//                        + (new_pos_y * 128.0 / 2.0)
+	//                        + (map[end_pos.x][end_pos.y].0 as f32) * 15.0 * (111.0 / (128.0 / 2.0) - 1.0)
+	//                        + 100.0;			
+	//					
+	//					
+						// Get target tile transform.
+						let target_tile_entity = map[end_pos.x][end_pos.y].3[map[end_pos.x][end_pos.y].3.len() - 1];
+						
+						let target_tile_transform = tile_transform_query.get(target_tile_entity).unwrap();
+						
+						transform.translation.x += ((target_tile_transform.translation.x - transform.translation.x) * progress);
+						transform.translation.y += ((target_tile_transform.translation.y - transform.translation.y  + 100.0) * progress);
+						
+
+
+						
+	//					// To fix bug with z-ordering when the unit is moving.
+	//					// ATTEMPT#1:
+	//					transform.translation.z = target_tile_transform.translation.z + 0.00000001;
+
+						// ATTEMPT#2:
+						// The correct z-order depends on the tile the unit is moving to.
+						if end_pos.x > start_pos.x {
+							
+						} else if end_pos.x < start_pos.x {
+							transform.translation.z = target_tile_transform.translation.z  + 0.00000001;
+						} else if end_pos.y < start_pos.y {
+							transform.translation.z = target_tile_transform.translation.z  + 0.00000001;
+						} else if end_pos.y > start_pos.y {
+						
+						}
+						
 					}
-					
 				}
-			} 
+			}
 		}
 	}
 }
 
 // Prototype
 fn tick_move_timer(
-mut move_action_query: Query<&mut MoveAction>,
+mut move_actions_query: Query<&mut MoveActions, With<MoveAction>>,
 time: Res<Time>
 ) {
-	for (mut move_action) in move_action_query.iter_mut() {
-		move_action.timer.tick(time.delta());
+	for (mut move_actions) in move_actions_query.iter_mut() {
+		if move_actions.move_actions.len() != 0 {
+			move_actions.move_actions[0].timer.tick(time.delta());
+		}
 	}
 }
 
@@ -2331,6 +2381,7 @@ mut next_state: ResMut<NextState<GameState>>,
 				x: record[4].parse().unwrap(),
 				y: record[5].parse().unwrap(),
 			},
+			MoveActions { move_actions: Vec::new(), },
 		)).id();
 		
 		let mut path_string: String = record[19].to_string();
@@ -2621,6 +2672,81 @@ mut next_state: ResMut<NextState<TurnState>>,
 	
 	
 	
+}
+
+use pathfinding::prelude::astar;
+use std::cell::RefCell;
+
+// Utility
+fn find_path(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, start: Pos, destination: Pos) -> Option<Vec<Pos>> {
+    // Define a heuristic function that estimates the distance between two positions.
+    // In this case, we use the Manhattan distance (taxicab distance).
+    let heuristic = |pos: &Pos| -> usize {
+        (pos.x as isize - destination.x as isize).abs() as usize
+            + (pos.y as isize - destination.y as isize).abs() as usize
+    };
+
+	// Use RefCell to wrap the map so that it can be mutated inside the closure.
+    let map_cell = RefCell::new(map);
+
+    // Define a function that returns the valid neighboring positions of a given position.
+    let neighbors = |pos: &Pos| -> Vec<(Pos, usize)> {
+		// Access the map using borrow_mut() to allow mutation.
+		let mut map = map_cell.borrow_mut();
+    
+        // Add logic to get the valid neighboring positions based on your map layout.
+        // For example, avoid diagonal moves and ensure the position is within the map bounds.
+        // For simplicity, let's assume you have a function called `get_valid_neighbors`.
+        get_valid_neighbors((&mut map).to_vec(), *pos)
+    };
+
+    // Use the `astar` function from the pathfinding library to find the path.
+    let result = astar(&start, neighbors, heuristic, |&pos| pos == destination);
+
+    if let Some((path, _)) = result {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+// Utility
+fn get_valid_neighbors(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, pos: Pos) -> Vec<(Pos, usize)> {
+	let mut neighbors: Vec<(Pos, usize)> = Vec::new(); 
+	
+	// Check if tile is at North edge.
+	if pos.y == map[0].len() - 1 {
+		// Tile is at North edge. Don't add North neighbor.
+	} else {
+		// Tile is not at North edge. Add North neighbor.
+		neighbors.push((Pos { x: pos.x, y: pos.y + 1, }, 0));
+	}
+	
+	// Check if tile is at South edge.
+	if pos.y == 0 {
+		// Tile is at South edge. Don't add South neighbor.
+	} else {
+		// Tile is not at South edge. Add South neighbor.
+		neighbors.push((Pos { x: pos.x, y: pos.y - 1, }, 0));
+	}
+	
+	// Check if tile is at East edge.
+	if pos.x == map.len() - 1 {
+		// Tile is at East edge. Don't add East neighbor.
+	} else {
+		// Tile is not at East edge. Add East neighbor.
+		neighbors.push((Pos { x: pos.x + 1, y: pos.y, }, 0));
+	} 
+	
+	// Check if tile is at West edge.
+	if pos.x == 0 {
+		// Tile is at West edge. Don't add West neighbor.
+	} else {
+		// Tile is not at West edge. Add West neighbor.
+		neighbors.push((Pos { x: pos.x - 1, y: pos.y, }, 0));
+	}
+	
+	return neighbors;
 }
 
 // Logging
