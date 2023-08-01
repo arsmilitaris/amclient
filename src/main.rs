@@ -2801,32 +2801,48 @@ fn get_valid_neighbors(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>
 	if pos.y == map[0].len() - 1 {
 		// Tile is at North edge. Don't add North neighbor.
 	} else {
-		// Tile is not at North edge. Add North neighbor.
-		neighbors.push((Pos { x: pos.x, y: pos.y + 1, }, 0));
+		// Tile is not at North edge. 
+		// Check if there's a unit on the tile.
+		// If there isn't, add North neighbor.
+		if map[pos.x][pos.y + 1].2.len() == 0 {
+			neighbors.push((Pos { x: pos.x, y: pos.y + 1, }, 0));
+		}
 	}
 	
 	// Check if tile is at South edge.
 	if pos.y == 0 {
 		// Tile is at South edge. Don't add South neighbor.
 	} else {
-		// Tile is not at South edge. Add South neighbor.
-		neighbors.push((Pos { x: pos.x, y: pos.y - 1, }, 0));
+		// Tile is not at South edge.
+		// Check if there's a unit on the tile.
+		// If there isn't, add South neighbor.
+		if map[pos.x][pos.y - 1].2.len() == 0 {
+			neighbors.push((Pos { x: pos.x, y: pos.y - 1, }, 0));
+		}
 	}
 	
 	// Check if tile is at East edge.
 	if pos.x == map.len() - 1 {
 		// Tile is at East edge. Don't add East neighbor.
 	} else {
-		// Tile is not at East edge. Add East neighbor.
-		neighbors.push((Pos { x: pos.x + 1, y: pos.y, }, 0));
+		// Tile is not at East edge.
+		// Check if there's a unit on the tile.
+		// If there isn't, add East neighbor.
+		if map[pos.x + 1][pos.y].2.len() == 0 {
+			neighbors.push((Pos { x: pos.x + 1, y: pos.y, }, 0));
+		}
 	} 
 	
 	// Check if tile is at West edge.
 	if pos.x == 0 {
 		// Tile is at West edge. Don't add West neighbor.
 	} else {
-		// Tile is not at West edge. Add West neighbor.
-		neighbors.push((Pos { x: pos.x - 1, y: pos.y, }, 0));
+		// Tile is not at West edge.
+		// Check if there's a unit on the tile.
+		// If there isn't, add West neighbor.
+		if map[pos.x - 1][pos.y].2.len() == 0 {
+			neighbors.push((Pos { x: pos.x - 1, y: pos.y, }, 0));
+		}
 	}
 	
 	return neighbors;
