@@ -163,6 +163,14 @@ struct CurrentUnit {
 }
 
 #[derive(Component)]
+struct MoveTile {}
+
+#[derive(Component)]
+struct MoveTiles {
+	move_tiles: Vec<Pos>,
+}
+
+#[derive(Component)]
 struct MoveActions {
 	move_actions: Vec<MoveAction>,
 }
@@ -234,7 +242,7 @@ struct GameText;
 #[derive(Component)]
 struct Unit;
 
-#[derive(Component, Clone, Reflect, Default, Eq, PartialEq, Hash, Copy)]
+#[derive(Component, Clone, Reflect, Default, Eq, PartialEq, Hash, Copy, Debug)]
 #[reflect(Default)]
 struct Pos {
 	x: usize,
@@ -312,6 +320,10 @@ struct UnitSprite { value: String, }
 #[reflect(Default)]
 struct DIR { direction: Direction, }
 
+#[derive(Component, Default, Reflect)]
+#[reflect(Default)]
+struct MovementRange { value: isize, }
+
 #[derive(Bundle)]
 struct UnitAttributes {
 	unit_id: UnitId,
@@ -335,6 +347,7 @@ struct UnitAttributes {
 	luk: LUK,
 	unit_sprite: UnitSprite,
 	dir: DIR,
+	movement_range: MovementRange,
 }
 
 // STATES
@@ -362,6 +375,7 @@ enum TurnState {
 	#[default]
 	Wait,
 	Turn,
+	ChooseMove,
 	AI,
 }
 
@@ -547,9 +561,16 @@ fn main() {
 		)
 		.add_systems(OnEnter(GameState::LoadAmbush), init_cursor_system)
 		.add_systems(OnEnter(TurnState::Turn), setup_cursor_system_2)
+		.add_systems(OnEnter(TurnState::ChooseMove), setup_cursor_system_2)
 		.add_systems(OnExit(TurnState::Turn), hide_cursor)
 		.add_systems(Update, move_cursor_2
 			.run_if(in_state(TurnState::Turn))
+		)
+		.add_systems(Update, move_cursor_2
+			.run_if(in_state(TurnState::ChooseMove))
+		)
+		.add_systems(Update, position_cursor
+			.run_if(in_state(TurnState::ChooseMove))
 		)
 		.add_systems(Update, tick_move_timer
 			.run_if(in_state(GameState::Move))
@@ -568,6 +589,7 @@ fn main() {
 		.add_systems(Update, wait_turn_system
 			.run_if(in_state(GameState::Ambush))
 			.run_if(not(in_state(TurnState::Turn)))
+			.run_if(not(in_state(TurnState::ChooseMove)))
 			.run_if(not(in_state(TurnState::AI)))
 		)
 		.add_systems(Update, end_turn_single_player
@@ -575,6 +597,13 @@ fn main() {
 		)
 		.add_systems(Update, first_ai
 			.run_if(in_state(TurnState::AI))
+		)
+		.add_systems(OnEnter(TurnState::ChooseMove), choose_move)
+		.add_systems(Update, start_choose_move
+			.run_if(in_state(TurnState::Turn))
+		)
+		.add_systems(Update, handle_choose_move
+			.run_if(in_state(TurnState::ChooseMove))
 		)
 		.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
@@ -834,6 +863,7 @@ fn generate_units_system(mut events: EventReader<UnitsReadEvent>, mut events2: E
 					luk : LUK { value: record[18].parse().unwrap(), },
 					unit_sprite : UnitSprite { value: record[19].to_string(), },
 					dir: DIR { direction: Direction::from_string(record[20].to_string()), },
+					movement_range: MovementRange { value: record[21].parse().unwrap(), },
 				},
 				Unit,
 			));
@@ -2426,6 +2456,7 @@ mut next_state: ResMut<NextState<GameState>>,
 				luk : LUK { value: record[18].parse().unwrap(), },
 				unit_sprite : UnitSprite { value: record[19].to_string(), },
 				dir: DIR { direction: Direction::from_string(record[20].to_string()), },
+				movement_range: MovementRange { value: record[21].parse().unwrap(), },
 			},
 			Unit,
 			UnitActions { unit_actions: Default::default(), processing_unit_action: false, },
@@ -2757,6 +2788,110 @@ asset_server: Res<AssetServer>,
 	}
 }
 
+// Prototype
+fn choose_move(
+mut commands: Commands,
+map_query: Query<&Map>,
+unit_query: Query<(Entity, &Pos, &MovementRange), With<CurrentUnit>>,
+tile_query: Query<&Transform, With<GameText>>,
+asset_server: Res<AssetServer>,
+) {
+	let map = &map_query.single().map;
+	let (entity, pos, movement_range) = unit_query.single();
+	
+	let possible_movements = find_possible_movements(map.to_vec(), *pos, movement_range.value);
+	info!("DEBUG: Possible movements are: {:?}.", possible_movements);
+	
+	// Spawn the MoveTile indicators.
+	
+	
+	for tile in &possible_movements {
+	
+		// Compute the indicator position, based on the tile.
+		if let Ok(tile_transform) = tile_query.get(map[tile.x][tile.y].3[map[tile.x][tile.y].3.len() - 1]) {
+			
+			commands.spawn((SpriteBundle {
+				sprite: Sprite {
+					color: Color::rgba(0.0, 0.0, 1.0, 0.5),
+					..default()
+				},
+				texture: asset_server.load("move_tile.png"),
+				transform: Transform::from_xyz(tile_transform.translation.x, tile_transform.translation.y, tile_transform.translation.z + 0.000000025),
+				..default()
+			},
+			MoveTile {},
+			));
+		}
+		
+		
+	}
+	
+	commands.entity(entity).insert(MoveTiles { move_tiles: possible_movements, });
+}
+
+// Prototype
+fn start_choose_move(
+mut input: ResMut<Input<KeyCode>>,
+mut next_state: ResMut<NextState<TurnState>>,
+) {
+	if input.just_pressed(KeyCode::M) {
+		info!("DEBUG: Setting TurnState to ChooseMove...");
+		next_state.set(TurnState::ChooseMove);
+		info!("DEBUG: Set TurnState to ChooseMove.");
+	}
+}
+
+// Prototype
+fn handle_choose_move(
+mut commands: Commands,
+mut input: ResMut<Input<KeyCode>>,
+mut unit_query: Query<(Entity, &MoveTiles, &Pos, &mut UnitActions)>,
+cursor_query: Query<&Cursor>,
+move_tiles_query: Query<Entity, With<MoveTile>>,
+mut next_state: ResMut<NextState<TurnState>>,
+) {
+	let cursor = cursor_query.single();
+	let (entity, move_tiles, pos, mut unit_actions) = unit_query.single_mut();
+
+	if input.just_pressed(KeyCode::M) {
+		// Check if cursor is in a MoveTile.
+		let cursor_pos = Pos { x: cursor.x, y: cursor.y, };
+		if move_tiles.move_tiles.contains(&cursor_pos) {
+			// Remove the MoveTiles
+			for entity in move_tiles_query.iter() {
+				commands.entity(entity).despawn();
+			}
+			
+			// Insert a `Move` `UnitAction` towards the target tile.
+			info!("DEBUG: Unit can move to this tile.");
+			info!("DEBUG: Moving unit...");
+			
+			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+					origin: Pos { x: pos.x, y: pos.y, },
+					destination: Pos { x: cursor.x, y: cursor.y },
+					timer: Timer::from_seconds(4.0, TimerMode::Once),
+			}, 0.0));
+			
+			// Set State
+			next_state.set(TurnState::Turn);
+			
+			
+		}
+		
+	}
+	
+	if input.just_pressed(KeyCode::Escape) {
+		// Remove the MoveTiles
+		for entity in move_tiles_query.iter() {
+			commands.entity(entity).despawn();
+		}
+	
+		info!("Setting TurnState back to Turn...");
+		next_state.set(TurnState::Turn);
+		info!("Set TurnState back to Turn.");
+	}
+}
+
 use pathfinding::prelude::astar;
 use std::cell::RefCell;
 
@@ -2846,6 +2981,34 @@ fn get_valid_neighbors(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>
 	}
 	
 	return neighbors;
+}
+
+use std::collections::HashSet;
+
+fn find_possible_movements(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, start: Pos, mut movement_range: isize) -> Vec<Pos> {
+    let mut possible_tiles_vec = Vec::new();
+    movement_range -= 1;
+	
+	let mut visited_tiles = HashSet::new();
+	
+	if movement_range >= 0 {
+		// Get neighbors.
+		let neighbors = get_valid_neighbors(map.clone(), start);
+		for neighbor in &neighbors {
+			if visited_tiles.insert(neighbor.0) {
+				possible_tiles_vec.push(neighbor.0);
+				let mut recursive_possible_tiles = find_possible_movements(map.clone(), neighbor.0, movement_range);
+				
+				for possible_tile in recursive_possible_tiles {
+					if !possible_tiles_vec.contains(&possible_tile) {
+						possible_tiles_vec.push(possible_tile);
+					}
+				}
+			}
+		}
+    }
+
+    possible_tiles_vec
 }
 
 // Logging
