@@ -171,6 +171,14 @@ struct MoveTiles {
 }
 
 #[derive(Component)]
+struct AttackTile {}
+
+#[derive(Component)]
+struct AttackTiles {
+	attack_tiles: Vec<Pos>,
+}
+
+#[derive(Component)]
 struct MoveActions {
 	move_actions: Vec<MoveAction>,
 }
@@ -324,6 +332,28 @@ struct DIR { direction: Direction, }
 #[reflect(Default)]
 struct MovementRange { value: isize, }
 
+#[derive(Component, Default, Reflect)]
+#[reflect(Default)]
+struct AttackRange { value: isize, }
+
+#[derive(Component, Default, Reflect, Clone, Copy)]
+#[reflect(Default)]
+enum AttackType {
+	#[default]
+	Melee,
+	Ranged,
+}
+
+impl AttackType {
+	fn from_string(string: String) -> AttackType {
+		match string.as_str() {
+			"Melee" => { return AttackType::Melee; },
+			"Ranged" => { return AttackType::Ranged; },
+			_ => { panic!("Invalid AttackType string: {}.", string); },
+		}
+	}
+}
+
 #[derive(Bundle)]
 struct UnitAttributes {
 	unit_id: UnitId,
@@ -348,6 +378,8 @@ struct UnitAttributes {
 	unit_sprite: UnitSprite,
 	dir: DIR,
 	movement_range: MovementRange,
+	attack_range: AttackRange,
+	attack_type: AttackType,
 }
 
 // STATES
@@ -376,6 +408,7 @@ enum TurnState {
 	Wait,
 	Turn,
 	ChooseMove,
+	ChooseAttack,
 	AI,
 }
 
@@ -471,6 +504,9 @@ fn main() {
 		.register_type::<UnitActionTuple>()
 		.register_type::<Pos>()
 		.register_type::<DIR>()
+		.register_type::<MovementRange>()
+		.register_type::<AttackRange>()
+		.register_type::<AttackType>()
 		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
 		.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default())
 		.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default())
@@ -572,6 +608,12 @@ fn main() {
 		.add_systems(Update, position_cursor
 			.run_if(in_state(TurnState::ChooseMove))
 		)
+		.add_systems(Update, move_cursor_2
+			.run_if(in_state(TurnState::ChooseAttack))
+		)
+		.add_systems(Update, position_cursor
+			.run_if(in_state(TurnState::ChooseAttack))
+		)
 		.add_systems(Update, tick_move_timer
 			.run_if(in_state(GameState::Move))
 		)
@@ -590,6 +632,7 @@ fn main() {
 			.run_if(in_state(GameState::Ambush))
 			.run_if(not(in_state(TurnState::Turn)))
 			.run_if(not(in_state(TurnState::ChooseMove)))
+			.run_if(not(in_state(TurnState::ChooseAttack)))
 			.run_if(not(in_state(TurnState::AI)))
 		)
 		.add_systems(Update, end_turn_single_player
@@ -604,6 +647,13 @@ fn main() {
 		)
 		.add_systems(Update, handle_choose_move
 			.run_if(in_state(TurnState::ChooseMove))
+		)
+		.add_systems(OnEnter(TurnState::ChooseAttack), choose_attack)
+		.add_systems(Update, start_choose_attack
+			.run_if(in_state(TurnState::Turn))
+		)
+		.add_systems(Update, handle_choose_attack
+			.run_if(in_state(TurnState::ChooseAttack))
 		)
 		.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system)
 		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
@@ -864,6 +914,8 @@ fn generate_units_system(mut events: EventReader<UnitsReadEvent>, mut events2: E
 					unit_sprite : UnitSprite { value: record[19].to_string(), },
 					dir: DIR { direction: Direction::from_string(record[20].to_string()), },
 					movement_range: MovementRange { value: record[21].parse().unwrap(), },
+					attack_range: AttackRange { value: record[22].parse().unwrap(), },
+					attack_type: AttackType::from_string(record[23].to_string()),
 				},
 				Unit,
 			));
@@ -2457,6 +2509,8 @@ mut next_state: ResMut<NextState<GameState>>,
 				unit_sprite : UnitSprite { value: record[19].to_string(), },
 				dir: DIR { direction: Direction::from_string(record[20].to_string()), },
 				movement_range: MovementRange { value: record[21].parse().unwrap(), },
+				attack_range: AttackRange { value: record[22].parse().unwrap(), },
+				attack_type: AttackType::from_string(record[23].to_string()),
 			},
 			Unit,
 			UnitActions { unit_actions: Default::default(), processing_unit_action: false, },
@@ -2845,7 +2899,7 @@ mut next_state: ResMut<NextState<TurnState>>,
 fn handle_choose_move(
 mut commands: Commands,
 mut input: ResMut<Input<KeyCode>>,
-mut unit_query: Query<(Entity, &MoveTiles, &Pos, &mut UnitActions)>,
+mut unit_query: Query<(Entity, &MoveTiles, &Pos, &mut UnitActions), With<CurrentUnit>>,
 cursor_query: Query<&Cursor>,
 move_tiles_query: Query<Entity, With<MoveTile>>,
 mut next_state: ResMut<NextState<TurnState>>,
@@ -2886,6 +2940,114 @@ mut next_state: ResMut<NextState<TurnState>>,
 			commands.entity(entity).despawn();
 		}
 	
+		info!("Setting TurnState back to Turn...");
+		next_state.set(TurnState::Turn);
+		info!("Set TurnState back to Turn.");
+	}
+}
+
+// Prototype
+fn start_choose_attack(
+mut input: ResMut<Input<KeyCode>>,
+mut next_state: ResMut<NextState<TurnState>>,
+) {
+	if input.just_pressed(KeyCode::F) {
+		info!("DEBUG: Setting TurnState to ChooseAttack...");
+		next_state.set(TurnState::ChooseAttack);
+		info!("DEBUG: Set TurnState to ChooseAttack.");
+	}
+}
+
+fn choose_attack(mut commands: Commands,
+map_query: Query<&Map>,
+unit_query: Query<(Entity, &Pos, &AttackRange, &AttackType), With<CurrentUnit>>,
+tile_query: Query<&Transform, With<GameText>>,
+asset_server: Res<AssetServer>,
+) {
+	let map = &map_query.single().map;
+	let (entity, pos, attack_range, attack_type) = unit_query.single();
+	
+	let possible_attacks = find_possible_attacks(map.to_vec(), *pos, attack_range.value, attack_type.clone());
+	info!("DEBUG: Possible attacks are: {:?}.", possible_attacks);
+	
+	// Spawn the AttackTile indicators.
+	
+	
+	for tile in &possible_attacks {
+	
+		// Compute the indicator position, based on the tile.
+		if let Ok(tile_transform) = tile_query.get(map[tile.x][tile.y].3[map[tile.x][tile.y].3.len() - 1]) {
+			
+			commands.spawn((SpriteBundle {
+				sprite: Sprite {
+					color: Color::rgba(1.0, 0.0, 0.0, 0.5),
+					..default()
+				},
+				texture: asset_server.load("attack_tile.png"),
+				transform: Transform::from_xyz(tile_transform.translation.x, tile_transform.translation.y, tile_transform.translation.z + 0.000000025),
+				..default()
+			},
+			AttackTile {},
+			));
+		}
+		
+		
+	}
+	
+	commands.entity(entity).insert(AttackTiles { attack_tiles: possible_attacks, });
+}
+
+// Prototype
+fn handle_choose_attack(
+mut commands: Commands,
+mut input: ResMut<Input<KeyCode>>,
+mut unit_query: Query<(Entity, &AttackTiles, &Pos, &mut UnitActions), With<CurrentUnit>>,
+cursor_query: Query<&Cursor>,
+attack_tiles_query: Query<Entity, With<AttackTile>>,
+mut next_state: ResMut<NextState<TurnState>>,
+) {
+	let cursor = cursor_query.single();
+	let (entity, attack_tiles, pos, mut unit_actions) = unit_query.single_mut();
+
+	if input.just_pressed(KeyCode::F) {
+		// Check if cursor is in a AttackTile.
+		let cursor_pos = Pos { x: cursor.x, y: cursor.y, };
+		if attack_tiles.attack_tiles.contains(&cursor_pos) {
+			// Remove the AttackTiles
+			for entity in attack_tiles_query.iter() {
+				commands.entity(entity).despawn();
+			}
+			
+			// Insert an `Attack` `UnitAction` towards the target unit.
+			info!("DEBUG: Unit can attack this tile.");
+			info!("DEBUG: Attacking...");
+			
+//			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+//					origin: Pos { x: pos.x, y: pos.y, },
+//					destination: Pos { x: cursor.x, y: cursor.y },
+//					timer: Timer::from_seconds(4.0, TimerMode::Once),
+//			}, 0.0));
+
+			// Remove the AttackTiles component from the unit.
+			commands.entity(entity).remove::<AttackTiles>();
+			
+			// Set State
+			next_state.set(TurnState::Turn);
+			
+			
+		}
+		
+	}
+	
+	if input.just_pressed(KeyCode::Escape) {
+		// Remove the AttackTile indicators
+		for entity in attack_tiles_query.iter() {
+			commands.entity(entity).despawn();
+		}
+		
+		// Remove the AttackTiles component from the unit.
+		commands.entity(entity).remove::<AttackTiles>();
+		
 		info!("Setting TurnState back to Turn...");
 		next_state.set(TurnState::Turn);
 		info!("Set TurnState back to Turn.");
@@ -2985,6 +3147,7 @@ fn get_valid_neighbors(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>
 
 use std::collections::HashSet;
 
+// Prototype
 fn find_possible_movements(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, start: Pos, mut movement_range: isize) -> Vec<Pos> {
     let mut possible_tiles_vec = Vec::new();
     movement_range -= 1;
@@ -3007,6 +3170,110 @@ fn find_possible_movements(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entit
 			}
 		}
     }
+
+    possible_tiles_vec
+}
+
+// Utility
+fn get_valid_attack_neighbors(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, pos: Pos) -> Vec<(Pos, usize)> {
+	let mut neighbors: Vec<(Pos, usize)> = Vec::new(); 
+	
+	// Check if tile is at North edge.
+	if pos.y == map[0].len() - 1 {
+		// Tile is at North edge. Don't add North neighbor.
+	} else {
+		// Tile is not at North edge. 
+		neighbors.push((Pos { x: pos.x, y: pos.y + 1, }, 0));
+	}
+	
+	// Check if tile is at South edge.
+	if pos.y == 0 {
+		// Tile is at South edge. Don't add South neighbor.
+	} else {
+		// Tile is not at South edge.
+		neighbors.push((Pos { x: pos.x, y: pos.y - 1, }, 0));
+	}
+	
+	// Check if tile is at East edge.
+	if pos.x == map.len() - 1 {
+		// Tile is at East edge. Don't add East neighbor.
+	} else {
+		// Tile is not at East edge.
+		neighbors.push((Pos { x: pos.x + 1, y: pos.y, }, 0));
+	} 
+	
+	// Check if tile is at West edge.
+	if pos.x == 0 {
+		// Tile is at West edge. Don't add West neighbor.
+	} else {
+		// Tile is not at West edge.
+		neighbors.push((Pos { x: pos.x - 1, y: pos.y, }, 0));
+	}
+	
+	return neighbors;
+}
+
+// Prototype
+fn find_possible_attacks(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, start: Pos, mut attack_range: isize, attack_type: AttackType) -> Vec<Pos> {
+    let mut possible_tiles_vec = Vec::new();
+    
+    match attack_type {
+		AttackType::Melee => {
+			// Get neighbors.
+			let neighbors = get_valid_attack_neighbors(map.clone(), start);
+			for neighbor in &neighbors {
+				possible_tiles_vec.push(neighbor.0);
+			}
+			
+			for neighbor in &neighbors {
+				for i in 1..attack_range {
+					// If there is an unit on the tile, don't search for more neighbors.
+					if map[neighbor.0.x][neighbor.0.y].2.len() > 0 {
+						break;
+					}
+					// Else...
+					// Add next neighbor.
+					let neighbors = get_valid_attack_neighbors(map.clone(), neighbor.0);
+					for neighbor in neighbors {
+						if (neighbor.0.x == start.x || neighbor.0.y == start.y) {
+							if !(neighbor.0.x == start.x && neighbor.0.y == start.y) {
+								if !(possible_tiles_vec.contains(&neighbor.0)) {
+									possible_tiles_vec.push(neighbor.0);
+								}
+							}
+						}
+					}
+				}			
+			}
+		},
+		AttackType::Ranged => {
+			attack_range -= 1;
+			
+			let mut visited_tiles = HashSet::new();
+			
+			if attack_range >= 0 {
+				// Get neighbors.
+				let neighbors = get_valid_attack_neighbors(map.clone(), start);
+				for neighbor in &neighbors {
+					if visited_tiles.insert(neighbor.0) {
+						possible_tiles_vec.push(neighbor.0);
+						let mut recursive_possible_tiles = find_possible_attacks(map.clone(), neighbor.0, attack_range, attack_type);
+						
+						for possible_tile in recursive_possible_tiles {
+							if !possible_tiles_vec.contains(&possible_tile) {
+								possible_tiles_vec.push(possible_tile);
+							}
+						}
+					}
+				}
+			}
+		},
+		_ => {
+			empty_system();
+		},
+    }
+    
+    
 
     possible_tiles_vec
 }
