@@ -416,6 +416,7 @@ enum GameState {
 	LoadAmbush,
 	Ambush,
 	SinglePlayerPause,
+	GameOver,
 }
 
 #[derive(Reflect, States, Debug, Clone, Eq, PartialEq, Hash, Default)]
@@ -457,6 +458,7 @@ struct Game {
 	current_unit: usize,
 	current_team: usize,
 	players: HashMap<usize, ControlledBy>,
+	winner: ControlledBy,
 }
 
 impl Default for Game {
@@ -464,7 +466,8 @@ impl Default for Game {
         Game {
             current_unit: 0,
             current_team: 1,
-            players: HashMap::new(), 
+            players: HashMap::new(),
+            winner: ControlledBy::None, 
         }
     }
 }
@@ -472,6 +475,7 @@ impl Default for Game {
 enum ControlledBy {
 	Player,
 	AI,
+	None,
 }
 
 #[derive(Resource, Default)]
@@ -612,6 +616,13 @@ fn main() {
 		.add_systems(Update, handle_unit_directions
 			.run_if(in_state(GameState::Move))
 		)
+		.add_systems(Update, handle_unit_death
+			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(Update, handle_ambush_game_over
+			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(OnTransition { from: GameState::Ambush, to: GameState::MainMenu, }, handle_ambush_to_main_menu_transition)
 		.add_systems(Update, position_cursor
 			.run_if(in_state(TurnState::Turn))
 		)
@@ -714,7 +725,8 @@ fn main() {
 		.add_systems(Update, handle_talk_state
 			.run_if(in_state(GameState::Talk))
 		)
-		.add_systems(Update, process_basic_attack_actions
+		.add_systems(Update, (apply_deferred, process_basic_attack_actions, apply_deferred)
+			.chain()
 			.run_if(in_state(GameState::Ambush))
 		)
 		//.add_systems(Update, setup_two_seconds_timer
@@ -1445,6 +1457,9 @@ fn wait_turn_system(mut units: Query<(Entity, &mut WTCurrent, &WTMax, &UnitId, &
 						next_state.set(TurnState::AI);
 						info!("DEBUG: Set TurnState to AI.");
 					},
+					ControlledBy::None => {
+						info!("DEBUG: There isn't any player or AI controlling the current team. Please assign a controller to this team.");
+					}
 				}
 			}
 		} else {
@@ -1508,6 +1523,7 @@ fn setup_game_resource_system(mut commands: Commands) {
 		current_unit: 0,
 		current_team: 1,
 		players: players,
+		winner: ControlledBy::None,
 	});
 }
 
@@ -2465,9 +2481,27 @@ mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &
 			// Damage is (STR / 3) + modifier.
 			let damage = (str.value / 3) + random_dmg_modifier;
 			
-			// Subtract damage fromt target HP.
-			hp_current.value -= damage;
+			// Subtract damage from target HP.
+			if damage > hp_current.value {
+				hp_current.value = 0;
+				
+				// Remove Attacker marker component.
+				commands.entity(entity).remove::<Attacker>();
+			
+				// Remove BasicAttack UnitAction.
+				unit_actions.unit_actions.remove(0);
+				unit_actions.processing_unit_action = false;
+				commands.entity(entity).remove::<BasicAttackAction>();
+				
+				info!("DEBUG: Processed BasicAttack action.");
+				
+				return;
+			} else {
+				hp_current.value -= damage;
+			}
+			
 			info!("DEBUG: Unit {:?} did {:?} damage to unit {:?}.", unit_id, damage, target_id);
+			info!("DEBUG: Unit {} now has {} HP.", target_id.value, hp_current.value);
 			
 			// Remove Target marker component from the target.
 			commands.entity(target_entity).remove::<Target>();
@@ -2511,9 +2545,7 @@ mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &
 		
 		// Remove Attacker marker component.
 		commands.entity(entity).remove::<Attacker>();
-		
-		
-		
+	
 		// Remove BasicAttack UnitAction.
 		unit_actions.unit_actions.remove(0);
 		unit_actions.processing_unit_action = false;
@@ -3189,6 +3221,90 @@ mut next_state: ResMut<NextState<TurnState>>,
 		info!("Setting TurnState back to Turn...");
 		next_state.set(TurnState::Turn);
 		info!("Set TurnState back to Turn.");
+	}
+}
+
+// Prototype
+fn handle_unit_death(
+mut commands: Commands,
+mut map_query: Query<&mut Map>,
+unit_query: Query<(Entity, &UnitId, &Pos, &HPCurrent)>,
+game: Res<Game>,
+mut next_state: ResMut<NextState<TurnState>>,
+) {
+	for (entity, unit_id, pos, hp_current) in unit_query.iter() {
+		if hp_current.value == 0 {
+			// Remove unit.
+			let mut map = &mut map_query.single_mut().map;
+			map[pos.x][pos.y].2.remove(0);
+			
+			info!("DEBUG: Unit {} has died. Removing it...", unit_id.value);
+			commands.entity(entity).despawn();
+			
+			// If that unit has the current turn, end it.
+			if unit_id.value == game.current_unit {
+				// Set TurnState to Wait.
+				info!("DEBUG: Setting TurnState to Wait...");
+				next_state.set(TurnState::Wait);
+				info!("DEBUG: Set TurnState to Wait.");
+			}
+		}
+	}
+}
+
+// Prototype
+fn handle_ambush_game_over(
+unit_query: Query<(Entity, &UnitTeam)>,
+mut next_state: ResMut<NextState<GameState>>,
+mut next_turn_state: ResMut<NextState<TurnState>>,
+mut game: ResMut<Game>,
+) {
+	let mut player_still_alive: bool = false;
+	let mut ai_still_alive: bool = false;
+	for (entity, unit_team) in unit_query.iter() {
+		if unit_team.value == 1 {
+			player_still_alive = true;
+		}
+		
+		if unit_team.value == 2 {
+			ai_still_alive = true;
+		}
+	}
+	
+	if !player_still_alive {
+		// Player lost.
+		info!("DEBUG: Game over. Winner is AI.");
+		game.winner = ControlledBy::AI;
+		
+		info!("DEBUG: Setting GameState to MainMenu...");
+		next_state.set(GameState::MainMenu);
+		info!("DEBUG: Set GameState to MainMenu.");
+		info!("DEBUG: Setting TurnState to Wait...");
+		next_turn_state.set(TurnState::Wait);
+		info!("DEBUG: Set TurnState to Wait.");
+	}
+	
+	if !ai_still_alive {
+		// Player won.
+		info!("DEBUG: Game over. Winner is Player.");
+		game.winner = ControlledBy::Player;
+		
+		info!("DEBUG: Setting GameState to MainMenu...");
+		next_state.set(GameState::MainMenu);
+		info!("DEBUG: Set GameState to MainMenu.");
+		info!("DEBUG: Setting TurnState to Wait...");
+		next_turn_state.set(TurnState::Wait);
+		info!("DEBUG: Set TurnState to Wait.");
+	}
+}
+
+// Prototype
+fn handle_ambush_to_main_menu_transition(
+mut commands: Commands,
+mut query: Query<Entity, Without<Window>>,
+) {
+	for entity in query.iter() {
+		commands.entity(entity).despawn();
 	}
 }
 
