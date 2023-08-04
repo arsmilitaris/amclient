@@ -51,6 +51,10 @@ enum UnitAction {
 	Talk {
 		message: String,
 	},
+	BasicAttack {
+		target: Pos,
+		is_counterattack: bool,
+	},
 	DoNothing,
 }
 
@@ -163,6 +167,12 @@ struct CurrentUnit {
 }
 
 #[derive(Component)]
+struct Attacker {}
+
+#[derive(Component)]
+struct Target {}
+
+#[derive(Component)]
 struct MoveTile {}
 
 #[derive(Component)]
@@ -194,6 +204,13 @@ struct MoveAction {
 struct TalkAction {
 	message: String,
 }
+
+#[derive(Component)]
+struct BasicAttackAction {
+	target: Pos,
+	is_counterattack: bool,
+}
+
 #[derive(Component)]
 struct DoNothingAction;
 
@@ -257,7 +274,7 @@ struct Pos {
 	y: usize,
 }
 
-#[derive(Component, Clone, Serialize, Deserialize)]
+#[derive(Component, Clone, Serialize, Deserialize, Debug)]
 struct UnitId { value: usize, }
 
 impl Default for UnitId {
@@ -590,6 +607,9 @@ fn main() {
 			.run_if(in_state(GameState::Ambush))
 		)
 		.add_systems(Update, handle_unit_directions
+			.run_if(in_state(GameState::Ambush))
+		)
+		.add_systems(Update, handle_unit_directions
 			.run_if(in_state(GameState::Move))
 		)
 		.add_systems(Update, position_cursor
@@ -693,6 +713,9 @@ fn main() {
 		)
 		.add_systems(Update, handle_talk_state
 			.run_if(in_state(GameState::Talk))
+		)
+		.add_systems(Update, process_basic_attack_actions
+			.run_if(in_state(GameState::Ambush))
 		)
 		//.add_systems(Update, setup_two_seconds_timer
 		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
@@ -2065,6 +2088,10 @@ time: Res<Time>,
 					info!("DEBUG: Current unit action is Talk.");
 					commands.entity(entity).insert(TalkAction { message: message.clone(), });
 				},
+				UnitAction::BasicAttack { target, is_counterattack, } => {
+					info!("DEBUG: Current unit action is BasicAttack.");
+					commands.entity(entity).insert(BasicAttackAction { target: target.clone(), is_counterattack: is_counterattack.clone(), });
+				}
 				UnitAction::DoNothing => {
 					info!("DEBUG: Current unit action is DoNothing.");
 					commands.entity(entity).insert(DoNothingAction);
@@ -2395,6 +2422,104 @@ fn process_do_nothing_actions(mut commands: Commands, mut unit_query: Query<(Ent
 		commands.entity(entity).remove::<DoNothingAction>();
 		
 		info!("DEBUG: Processed DoNothing action.");
+	}	
+}
+
+// Prototype
+fn process_basic_attack_actions(
+mut commands: Commands,
+map_query: Query<&Map>,
+mut attack_unit_query: Query<(Entity, &UnitId, &mut UnitActions, &STR, &Pos, &mut DIR, &BasicAttackAction), (With<Attacker>, Without<Target>)>,
+mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &AttackRange, &AttackType), (With<Target>, Without<Attacker>)>,
+) {
+	let map = &map_query.single().map;
+
+	for (entity, unit_id, mut unit_actions, str, pos, mut dir, basic_attack_action) in attack_unit_query.iter_mut() {
+		info!("DEBUG: Processing BasicAttack action...");
+		
+		// Get target entity from map.
+		let target_entity = map[basic_attack_action.target.x][basic_attack_action.target.y].2[0];
+		
+		// Get target health.
+		if let Ok((target_id, mut target_unit_actions, target_pos, mut hp_current, attack_range, attack_type)) = target_unit_query.get_mut(target_entity) {
+			// Change attacker's direction to face the target.
+			// Set the unit's direction.
+			if target_pos.x < pos.x {
+				dir.direction = Direction::West;
+			} else if target_pos.x > pos.x {
+				dir.direction = Direction::East;
+			}
+			if target_pos.y < pos.y {
+				dir.direction = Direction::South;
+			} else if target_pos.y > pos.y {
+				dir.direction = Direction::North;
+			}
+			
+			// Compute a random number between -3 to 3.
+			let mut rng = rand::thread_rng();
+			let random_dmg = rng.gen_range(0..7);
+			let random_dmg_modifier = random_dmg - 3;
+			
+			
+			// Add random modifier to damage.
+			// Damage is (STR / 3) + modifier.
+			let damage = (str.value / 3) + random_dmg_modifier;
+			
+			// Subtract damage fromt target HP.
+			hp_current.value -= damage;
+			info!("DEBUG: Unit {:?} did {:?} damage to unit {:?}.", unit_id, damage, target_id);
+			
+			// Remove Target marker component from the target.
+			commands.entity(target_entity).remove::<Target>();
+			
+			match unit_actions.unit_actions[0].0 {
+				UnitAction::BasicAttack { target, is_counterattack, } => {
+					// If it is not already a counter-attack...
+					if !is_counterattack {
+						// If target is not a ranged unit...
+						// Insert a counter-attack.
+						match attack_type {
+							AttackType::Ranged => { 
+								info!("DEBUG: Target is a ranged unit. Won't make a counter-attack.");
+							},
+							AttackType::Melee => {
+								info!("DEBUG: Target is a melee unit. Will make a counter-attack if at range.");
+								let target_possible_attacks = find_possible_attacks(map.to_vec(), *target_pos, attack_range.value, *attack_type);
+								
+								if target_possible_attacks.contains(pos) {
+									// Insert a BasicAttack as a counter-attack.
+									target_unit_actions.unit_actions.push(UnitActionTuple(UnitAction::BasicAttack {
+										target: Pos { x: pos.x, y: pos.y, },
+										is_counterattack: true,
+									}, 0.0));
+									
+									// Insert the Attacker marker component on the counter-attacking unit.
+									commands.entity(target_entity).insert(Attacker {});
+									
+									// Insert the Target marker component on the unit that did the initial attack.
+									// This will result in an infinite Attack and CounterAttack loop for now.
+									commands.entity(entity).insert(Target {});
+								}
+							}
+						}
+					}
+				},
+				_ => { empty_system() },
+			}
+			
+		}
+		
+		// Remove Attacker marker component.
+		commands.entity(entity).remove::<Attacker>();
+		
+		
+		
+		// Remove BasicAttack UnitAction.
+		unit_actions.unit_actions.remove(0);
+		unit_actions.processing_unit_action = false;
+		commands.entity(entity).remove::<BasicAttackAction>();
+		
+		info!("DEBUG: Processed BasicAttack action.");
 	}	
 }
 
@@ -3000,12 +3125,15 @@ asset_server: Res<AssetServer>,
 // Prototype
 fn handle_choose_attack(
 mut commands: Commands,
+map_query: Query<&Map>,
 mut input: ResMut<Input<KeyCode>>,
 mut unit_query: Query<(Entity, &AttackTiles, &Pos, &mut UnitActions), With<CurrentUnit>>,
 cursor_query: Query<&Cursor>,
 attack_tiles_query: Query<Entity, With<AttackTile>>,
 mut next_state: ResMut<NextState<TurnState>>,
 ) {
+	let map = &map_query.single().map;
+
 	let cursor = cursor_query.single();
 	let (entity, attack_tiles, pos, mut unit_actions) = unit_query.single_mut();
 
@@ -3013,30 +3141,40 @@ mut next_state: ResMut<NextState<TurnState>>,
 		// Check if cursor is in a AttackTile.
 		let cursor_pos = Pos { x: cursor.x, y: cursor.y, };
 		if attack_tiles.attack_tiles.contains(&cursor_pos) {
-			// Remove the AttackTiles
-			for entity in attack_tiles_query.iter() {
-				commands.entity(entity).despawn();
-			}
-			
-			// Insert an `Attack` `UnitAction` towards the target unit.
-			info!("DEBUG: Unit can attack this tile.");
-			info!("DEBUG: Attacking...");
-			
-//			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
-//					origin: Pos { x: pos.x, y: pos.y, },
-//					destination: Pos { x: cursor.x, y: cursor.y },
-//					timer: Timer::from_seconds(4.0, TimerMode::Once),
-//			}, 0.0));
-
-			// Remove the AttackTiles component from the unit.
-			commands.entity(entity).remove::<AttackTiles>();
-			
-			// Set State
-			next_state.set(TurnState::Turn);
-			
-			
-		}
 		
+			// Check it there is an unit on the tile.
+			// So that the player won't attack empty tiles.
+			// In the future we will add the option to attack empty tiles.
+			// To be in accordance with Tactics Ogre.
+			
+			if map[cursor.x][cursor.y].2.len() > 0 {
+				// Remove the AttackTiles
+				for entity in attack_tiles_query.iter() {
+					commands.entity(entity).despawn();
+				}
+				
+				// Insert an `Attack` `UnitAction` towards the target unit.
+				info!("DEBUG: Unit can attack this tile.");
+				info!("DEBUG: Attacking...");
+				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::BasicAttack {
+					target: Pos { x: cursor.x, y: cursor.y, },
+					is_counterattack: false,
+				}, 0.0));
+				
+				// Insert an `Attacker` marker component on the attacking unit.
+				commands.entity(entity).insert(Attacker {});
+				
+				// Insert the `Target` marker component on the target unit.
+				let target_entity = map[cursor.x][cursor.y].2[0];
+				commands.entity(target_entity).insert(Target {});
+								
+				// Remove the AttackTiles component from the unit.
+				commands.entity(entity).remove::<AttackTiles>();
+				
+				// Set State
+				next_state.set(TurnState::Turn);
+			}
+		}
 	}
 	
 	if input.just_pressed(KeyCode::Escape) {
