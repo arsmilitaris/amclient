@@ -749,6 +749,9 @@ fn main() {
 			.chain()
 			.run_if(in_state(GameState::Ambush))
 		)
+		.add_systems(Update, center_camera_on_unit
+			.run_if(in_state(GameState::Move))
+		)
 		//.add_systems(Update, setup_two_seconds_timer
 		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
 		//	//.after(first_move_unit_action)
@@ -2068,17 +2071,18 @@ fn text_already_setup(query: Query<&GameText>) -> bool {
 //	info!("DEBUG: Text is at position {}.", text.single().translation);
 //}
 //
-//// Client
-//fn center_camera_on_unit(
-//unit_transform_query: Query<&Transform, With<Unit>>,
-//mut camera_transform_query: Query<&mut Transform, (With<Camera>, Without<Unit>)>,
-//) {
-//	let unit_transform = unit_transform_query.single();
-//	let mut camera_transform = camera_transform_query.single_mut();
-//	
-//	camera_transform.translation = Vec3::new(unit_transform.translation.x, unit_transform.translation.y, camera_transform.translation.z);
-//}
-//
+
+// Prototype
+fn center_camera_on_unit(
+unit_transform_query: Query<&Transform, With<CurrentUnit>>,
+mut camera_transform_query: Query<&mut Transform, (With<Camera>, Without<CurrentUnit>)>,
+) {
+	let unit_transform = unit_transform_query.single();
+	let mut camera_transform = camera_transform_query.single_mut();
+	
+	camera_transform.translation = Vec3::new(unit_transform.translation.x, unit_transform.translation.y, camera_transform.translation.z);
+}
+
 //fn test_ortho_projection(
 //ortho_projection_query: Query<&OrthographicProjection>,
 //) {
@@ -2086,6 +2090,7 @@ fn text_already_setup(query: Query<&GameText>) -> bool {
 //	
 //	info!("DEBUG: Orthographic projection far is: {:?}.", ortho_projection.far);
 //}
+
 //
 // Prototype
 fn process_unit_actions(
