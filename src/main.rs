@@ -41,6 +41,9 @@ use serde::{Deserialize, Serialize};
 
 use rand::Rng;
 
+use pathfinding::prelude::astar;
+use std::cell::RefCell;
+
 #[derive(Reflect)]
 enum UnitAction {
 	Move {
@@ -244,13 +247,6 @@ impl Default for UnitActionTuple {
         UnitActionTuple(UnitAction::DoNothing, 0.0)
     }
 }
-
-//impl ReflectDefault for UnitActionTuple {
-//    fn reflect_default() -> Self {
-//        // return the default value of UnitActionTuple
-//        UnitActionTuple(UnitAction::DoNothing, 0.0)
-//    }
-//}
 
 #[derive(Component)]
 struct TalkUI {
@@ -588,15 +584,7 @@ fn main() {
 			(move_cursor_system, end_turn_system, (apply_state_transition::<GameState>, handle_player_turn_server_message, apply_state_transition::<GameState>).chain())
 				.run_if(in_state(GameState::Battle))
 		)
-		//.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().after(handle_player_turn_server_message).run_if(in_state(GameState::Wait)))
-		//.add_systems(Update, (apply_state_transition::<GameState>, current_state).chain().run_if(in_state(GameState::Wait)))
-		//.add_systems(Update, (apply_state_transition::<GameState>, current_state2).chain().run_if(in_state(GameState::Battle)))
-		//.add_systems(Update, change_state.run_if(in_state(GameState::Battle)))
 		.add_systems(OnExit(GameState::Battle), remove_cursor_system)
-		//.add_systems(Update,
-		//	(wait_turn_system, handle_player_turn_server_message)
-		//		.run_if(in_state(GameState::WaitTurn))
-		//)
 		.add_systems(Update, handle_player_turn_server_message
 			.run_if(in_state(GameState::Wait))
 		)
@@ -618,12 +606,6 @@ fn main() {
 			.after(spawn_units)
 		)
 		.add_systems(OnExit(GameState::LoadAmbush), handle_unit_directions)
-//		.add_systems(Update, z_order_system
-//			.run_if(in_state(GameState::Move))
-//		)
-//		.add_systems(Update, z_unit_order_system
-//			.run_if(in_state(GameState::Move))
-//		)
 		.add_systems(Update, z_order_system
 			.run_if(in_state(GameState::Ambush))
 		)
@@ -707,15 +689,6 @@ fn main() {
 			.run_if(in_state(TurnState::ChooseAttack))
 		)
 		.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system)
-		//.add_systems(OnEnter(GameState::LoadMap), (apply_deferred, spawn_gaul_warrior)
-		//	.chain()
-		//	.after(setup_text_system)
-		//)
-		//.add_systems(OnEnter(GameState::Ambush), (apply_deferred, spawn_naked_swordsman)
-		//	.chain()
-		//	//.after(spawn_gaul_warrior)
-		//	.after(setup_text_system)
-		//)
 //		.add_systems(Update, move_gaul_warrior
 //			.run_if(in_state(GameState::Ambush))
 //			//.run_if(warrior_already_spawned)
@@ -723,13 +696,7 @@ fn main() {
 		.add_systems(Update, (process_unit_actions, apply_deferred)
 			.chain()
 			.run_if(in_state(GameState::Ambush))
-			//.run_if(warrior_already_spawned)
 		)
-		//.add_systems(Update, (apply_deferred, first_move_unit_action)
-		//	.chain()
-		//	.run_if(in_state(GameState::Ambush).and_then(run_once()))
-		//	.after(spawn_naked_swordsman)
-		//)
 		.add_systems(Update, (apply_deferred, process_move_actions, apply_deferred)
 			.chain()
 			.run_if(in_state(GameState::Ambush))
@@ -752,53 +719,6 @@ fn main() {
 		.add_systems(Update, center_camera_on_unit
 			.run_if(in_state(GameState::Move))
 		)
-		//.add_systems(Update, setup_two_seconds_timer
-		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
-		//	//.after(first_move_unit_action)
-		//)
-		//.add_systems(OnEnter(GameState::Ambush), (apply_deferred, cutscene_1)
-		//	.chain()
-		//	.after(spawn_naked_swordsman)
-		//)
-		//.add_systems(Update, second_move_action
-		//	.run_if(in_state(GameState::LoadMap))
-		//	.run_if(two_seconds_have_passed)
-		//	.after(first_move_unit_action)
-		//)
-		//.add_systems(Update, (apply_deferred, first_talk_unit_action)
-		//	.chain()
-		//	.run_if(in_state(GameState::LoadMap).and_then(run_once()))
-		//	//.after(third_move_action)
-		//)
-		//.add_systems(Update, third_move_action
-		//	.run_if(six_seconds_have_passed)
-		//	.after(second_move_action)
-		//)
-		//.add_systems(Update, (second_move_action.run_if(two_seconds_have_passed), third_move_action.run_if(six_seconds_have_passed), first_talk_unit_action.run_if(run_once()))
-		//	.chain()
-		//	.run_if(in_state(GameState::LoadMap))
-		//	.after(first_move_unit_action)
-		//)
-		//.add_systems(Update, tick_timers
-		//	.run_if(in_state(GameState::LoadMap))
-		//)
-		//.add_systems(Update, (apply_deferred, test_system_3)
-		//	.chain()
-		//	.run_if(in_state(GameState::LoadMap))
-		//)
-		//.add_systems(Update, print_gaul_warrior
-		//	.run_if(in_state(GameState::LoadMap))
-		//	.run_if(warrior_already_spawned)
-		//)
-		//.add_systems(Update, (apply_deferred, center_camera_on_unit)
-		//	.chain()
-		//	.run_if(in_state(GameState::LoadMap))
-		//	.run_if(warrior_already_spawned)
-		//)
-		//.add_systems(Update, (apply_deferred, test_ortho_projection)
-		//	.chain()
-		//	.run_if(in_state(GameState::LoadMap))
-		//)
 		.add_systems(Startup, get_toggle_console_key)
 		.run();
 }
@@ -1893,36 +1813,7 @@ windows: Query<&Window, With<PrimaryWindow>>,
 		// Cursor is not inside the window.
 	}
 }
-//
-//// Client
-//fn spawn_gaul_warrior(
-//mut commands: Commands,
-//mut map_query: Query<&mut Map>,
-//asset_server: Res<AssetServer>,
-//) {
-//	info!("DEBUG: Spawning Gaul Warrior...");
-//	
-//	let mut map = &mut map_query.single_mut().map;
-//	
-//	let entity_id = commands.spawn((
-//		SpriteBundle {
-//			texture: asset_server.load("gaul_warrior.png"),
-//			transform: Transform::from_xyz((0 as f32) * 256.0 / 2.0 - (0 as f32) * 256.0 / 2.0, (0 as f32) * 128.0 / 2.0 + (0 as f32) * 128.0 / 2.0 + (map[0][0].0 as f32) * 15.0 + 100.0, 1.0),
-//			..default()
-//		},
-//		Unit,
-//		Pos {
-//			x: 0,
-//			y: 0,
-//		},
-//		UnitActions { unit_actions: Vec::<(UnitAction, f32)>::new(), processing_unit_action: false, },
-//	)).id();
-//	
-//	map[0][0].2.push(entity_id);
-//	
-//	info!("DEBUG: Spawned Gaul Warrior.");
-//}
-//
+
 // Prototype
 fn spawn_naked_swordsman(
 mut commands: Commands,
@@ -1952,7 +1843,7 @@ asset_server: Res<AssetServer>,
 	
 	info!("DEBUG: Spawned Naked Swordsman.");
 }
-//
+
 // Prototype
 fn move_gaul_warrior(
 mut map_query: Query<&mut Map>,
@@ -2030,15 +1921,7 @@ mut asset_server: Res<AssetServer>,
 		}
 	} 
 }
-//
-//// Utility
-//fn print_gaul_warrior(
-//query: Query<&Transform, With<Unit>>,
-//) {
-//	let unit_transform = query.single();
-//	info!("DEBUG: Unit translation is: {:?}.", unit_transform.translation);
-//}
-//
+
 // Client & Server
 fn grid_already_setup(query: Query<&Map>) -> bool {
 	if query.iter().len() == 0 {
@@ -2057,21 +1940,6 @@ fn text_already_setup(query: Query<&GameText>) -> bool {
 	}
 }
 
-//// Client
-//fn warrior_already_spawned(query: Query<&Unit>) -> bool {
-//	if query.iter().len() == 0 {
-//		return false;
-//	} else {
-//		return true;
-//	}
-//}
-//
-//// Client
-//fn test_system(text: Query<&Transform, With<GameText>>) {
-//	info!("DEBUG: Text is at position {}.", text.single().translation);
-//}
-//
-
 // Prototype
 fn center_camera_on_unit(
 unit_transform_query: Query<&Transform, With<CurrentUnit>>,
@@ -2083,15 +1951,15 @@ mut camera_transform_query: Query<&mut Transform, (With<Camera>, Without<Current
 	camera_transform.translation = Vec3::new(unit_transform.translation.x, unit_transform.translation.y, camera_transform.translation.z);
 }
 
-//fn test_ortho_projection(
-//ortho_projection_query: Query<&OrthographicProjection>,
-//) {
-//	let ortho_projection = ortho_projection_query.single();
-//	
-//	info!("DEBUG: Orthographic projection far is: {:?}.", ortho_projection.far);
-//}
+fn test_ortho_projection(
+ortho_projection_query: Query<&OrthographicProjection>,
+) {
+	let ortho_projection = ortho_projection_query.single();
+	
+	info!("DEBUG: Orthographic projection far is: {:?}.", ortho_projection.far);
+}
 
-//
+
 // Prototype
 fn process_unit_actions(
 mut commands: Commands,
@@ -2142,30 +2010,6 @@ time: Res<Time>,
 	}
 }
 
-//// Prototype
-//fn first_move_unit_action(
-//mut unit_query: Query<(Entity, &mut UnitActions), (With<Unit>, With<NakedSwordsman>)>,
-//) {
-//	for (entity, mut unit_actions) in unit_query.iter_mut() {
-//		//unit_actions.unit_actions.0.push(UnitAction::Move { destination: Pos { x: 2, y: 2, } });
-//		info!("DEBUG: Added Move UnitAction.");
-//		info!("DEBUG: unit_actions length is now: {}.", unit_actions.unit_actions.len());
-//	}
-//}
-//
-//// Prototype
-//fn first_talk_unit_action(
-//mut unit_query: Query<(Entity, &mut UnitActions), With<Unit>>,
-//) {
-//	for (entity, mut unit_actions) in unit_query.iter_mut() {
-//		//unit_actions.unit_actions.0.push(UnitAction::Talk { message: "Lorem ipsum".to_string() });
-//		info!("DEBUG: Added Talk UnitAction.");
-//		info!("DEBUG: unit_actions length is now: {}.", unit_actions.unit_actions.len());
-//		break;
-//	}
-//}
-//
-
 // Prototype
 fn process_move_actions(
 mut commands: Commands,
@@ -2202,9 +2046,6 @@ mut next_state: ResMut<NextState<GameState>>,
 				}
 			}
 		}
-		
-//		// Remove the MoveAction component.
-//		commands.entity(entity).remove::<MoveAction>();
 		
 		// Set GameState to Move
 		info!("DEBUG: Setting GameState to Move...");
@@ -2266,14 +2107,10 @@ time: Res<Time>,
 						
 						move_actions.move_actions.remove(0);
 						info!("DEBUG: Processed MoveAction.");
-						
-		//				// Set GameState back to Ambush
-		//				info!("DEBUG: Setting GameState to Ambush...");
-		//				next_state.set(GameState::Ambush);
-		//				info!("DEBUG: Set GameState to Ambush.");
 					
 					} else {
 						// Move is still in progress, update the unit's position gradually
+						
 						//info!("DEBUG: Move in progress, updating unit position.");
 						//move_action.timer.tick(time.delta());
 											
@@ -2296,21 +2133,6 @@ time: Res<Time>,
 						
 						let progress = move_action.timer.elapsed_secs() / 2.0;
 
-						
-
-	//					// NEED TO GET THE TRANSFORM AT THE START POS.
-	//
-	//					let new_pos_x = (start_pos.x as f32 * (1.0 - progress) + end_pos.x as f32 * progress) as f32;
-	//                    let new_pos_y = (start_pos.y as f32 * (1.0 - progress) + end_pos.y as f32 * progress) as f32;
-	//
-	//                    // Interpolate the translation between the old and new positions
-	//                    transform.translation.x = (new_pos_x * 256.0 / 2.0) - (new_pos_y as f32 * 256.0 / 2.0);
-	//                    transform.translation.y = (new_pos_x * 128.0 / 2.0)
-	//                        + (new_pos_y * 128.0 / 2.0)
-	//                        + (map[end_pos.x][end_pos.y].0 as f32) * 15.0 * (111.0 / (128.0 / 2.0) - 1.0)
-	//                        + 100.0;			
-	//					
-	//					
 						// Get target tile transform.
 						let target_tile_entity = map[end_pos.x][end_pos.y].3[map[end_pos.x][end_pos.y].3.len() - 1];
 						
@@ -2580,56 +2402,6 @@ mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &
 	}	
 }
 
-//
-//// Prototype
-//fn second_move_action(
-//mut commands: Commands,
-//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
-//) {
-//	info!("DEBUG: Adding second Move UnitAction...");
-//	let (entity, mut unit_actions) = swordsman_query.single_mut();
-//	//unit_actions.unit_actions.0.push(UnitAction::Move { destination: Pos { x: 4, y: 2, } });
-//	info!("DEBUG: Added second Move UnitAction.");
-//}
-//
-//// Prototype
-//fn third_move_action(
-//mut commands: Commands,
-//mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
-//) {
-//	info!("DEBUG: Adding third Move UnitAction...");
-//	let (entity, mut unit_actions) = swordsman_query.single_mut();
-//	//unit_actions.unit_actions.0.push(UnitAction::Move { destination: Pos { x: 6, y: 2, } });
-//	info!("DEBUG: Added third Move UnitAction.");
-//}
-//
-//// Prototype
-//fn setup_two_seconds_timer(
-//mut timers: ResMut<Timers>,
-//) {
-//	timers.two_second_timer = Timer::from_seconds(4.0, TimerMode::Once);
-//	timers.six_second_timer = Timer::from_seconds(6.0, TimerMode::Once);
-//}
-//
-//// Prototype
-//fn two_seconds_have_passed(
-//timers: Res<Timers>,
-//
-//) -> bool {
-//	if timers.two_second_timer.just_finished() {
-//		return true;
-//	} else {
-//		return false;
-//	}
-//}
-//
-//// Prototype
-//fn six_seconds_have_passed(
-//timers: Res<Timers>,
-//) -> bool {
-//	return timers.six_second_timer.just_finished();
-//}
-//
 //// Prototype
 //fn cutscene_1(mut commands: Commands,
 //mut swordsman_query: Query<(Entity, &mut UnitActions), With<NakedSwordsman>>,
@@ -2705,23 +2477,6 @@ mut next_state: ResMut<NextState<GameState>>,
 		
 		let mut path_string: String = record[19].to_string();
 		path_string.push_str("_east.png");
-		//let path_buf = PathBuf::from(path_string);
-		//let path = Path::new(&path_string);
-		//let asset_path = AssetPath::new_ref(path, None);
-		//let mut asset_path: AssetPath<'static> = AssetPath::from(String::from(record[19].to_string()));
-		//let path_buf: PathBuf = asset_path.as_ref().into();
-		//let modified_path = format!("{:?}{}", asset_path, "_east.png");
-		//let modified_path = asset_path.to_string_lossy().to_string() + "_east.png";
-		//let modified_path = path_buf.with_extension("").to_string_lossy().to_string() + "_east.png";
-		//info!("DEBUG: Unit path is: {:?}.", asset_path);
-		//let modified_path = asset_path.to_string() + "_east.png";
-		//asset_path = AssetPath::from(modified_path);
-		
-//		commands.entity(entity_id).insert(SpriteBundle {
-//					texture: asset_server.load(path_string),
-//					transform: Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0  * (111.0 / (128.0 / 2.0) - 1.0) + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0),
-//					..default()
-//		},);
 		
 		// Get tile transform.
 		let tile_entity = map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].3[map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].3.len() - 1];
@@ -2739,8 +2494,8 @@ mut next_state: ResMut<NextState<GameState>>,
 		
 		map[record[4].parse::<usize>().unwrap()][record[5].parse::<usize>().unwrap()].2.push(entity_id);
 		
-		info!("DEBUG: Unit transform is: {:?}.", Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0));
-		//info!("DEBUG: 
+		//info!("DEBUG: Unit transform is: {:?}.", Transform::from_xyz((record[4].parse::<usize>().unwrap() as f32) * 256.0 / 2.0 - (record[5].parse::<usize>().unwrap() as f32) * 256.0 / 2.0, (record[4].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (record[5].parse::<usize>().unwrap() as f32) * 128.0 / 2.0 + (map[record[4].parse::<usize>().unwrap() as usize][record[5].parse::<usize>().unwrap() as usize].0 as f32) * 15.0 + 100.0, 1.0));
+		 
 		
 		//* (111.0 / (128.0 / 2.0) - 1.0)
 	}
@@ -2750,14 +2505,6 @@ mut next_state: ResMut<NextState<GameState>>,
 	next_state.set(GameState::Ambush);
 	info!("DEBUG: Set GameState to Ambush.");
 }
-
-//
-//// Prototype
-//fn tick_timers(mut timers: ResMut<Timers>, time: Res<Time>) {
-//	timers.two_second_timer.tick(time.delta());
-//	timers.six_second_timer.tick(time.delta());
-//}
-//
 
 // Client
 fn loading_complete(client: Res<Client>, mut next_state: ResMut<NextState<GameState>>, state: Res<State<GameState>>) {
@@ -3549,9 +3296,6 @@ mut next_state: ResMut<NextState<GameState>>,
 		}
 	}
 }
-
-use pathfinding::prelude::astar;
-use std::cell::RefCell;
 
 // Utility
 fn find_path(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>, start: Pos, destination: Pos) -> Option<Vec<Pos>> {
