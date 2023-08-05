@@ -157,6 +157,21 @@ struct MoveCommand {
 // COMPONENTS
 
 #[derive(Component)]
+struct MainMenuUI {}
+
+#[derive(Component)]
+struct StartDemoButton {}
+
+#[derive(Component)]
+struct StartAmbushButton {}
+
+#[derive(Component)]
+struct StartMultiplayerButton {}
+
+#[derive(Component)]
+struct QuitGameButton {}
+
+#[derive(Component)]
 struct NakedSwordsman {
 
 }
@@ -517,7 +532,7 @@ fn main() {
 			keys: vec![ToggleConsoleKey::KeyCode(KeyCode::Backslash)],
 			..Default::default()
 		})
-		.add_plugin(WorldInspectorPlugin::new())
+//		.add_plugin(WorldInspectorPlugin::new())
 		.register_type::<ConsoleConfiguration>()
 		.register_type::<HPCurrent>()
 		.register_type::<UnitActions>()
@@ -528,11 +543,11 @@ fn main() {
 		.register_type::<MovementRange>()
 		.register_type::<AttackRange>()
 		.register_type::<AttackType>()
-		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
-		.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default())
-		.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default())
-		.add_plugin(ResourceInspectorPlugin::<NextState<GameState>>::default())
-		.add_plugin(ResourceInspectorPlugin::<NextState<TurnState>>::default())
+//		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
+//		.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default())
+//		.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default())
+//		.add_plugin(ResourceInspectorPlugin::<NextState<GameState>>::default())
+//		.add_plugin(ResourceInspectorPlugin::<NextState<TurnState>>::default())
 		.add_console_command::<DoNothingCommand, _>(do_nothing_command)
 		.add_console_command::<TalkCommand, _>(talk_command)
 		.add_console_command::<MoveCommand, _>(move_command)
@@ -550,6 +565,11 @@ fn main() {
 		.add_systems(OnEnter(GameState::MainMenu),
 			(start_connection, send_get_client_id_message)
 				.chain()
+		)
+		.add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
+		.add_systems(OnExit(GameState::MainMenu), tear_down_main_menu)
+		.add_systems(Update, handle_main_menu_buttons
+			.run_if(in_state(GameState::MainMenu))
 		)
 		.add_systems(Update,
 			(send_start_game_message_system, handle_server_messages)
@@ -3305,6 +3325,223 @@ mut query: Query<Entity, Without<Window>>,
 ) {
 	for entity in query.iter() {
 		commands.entity(entity).despawn();
+	}
+}
+
+// Prototype
+fn setup_main_menu(
+mut commands: Commands,
+asset_server: Res<AssetServer>,
+) {
+	commands.spawn(Camera2dBundle::default());
+
+//	// Spawn Ars Militaris Logo.
+//	commands.spawn(ImageBundle {
+//		style: Style {
+//			width: Val::Percent(100.0),
+//			height: Val::Percent(70.0),
+//			bottom: Val::Percent(30.0),
+//			..default()
+//		}, 
+//        image: asset_server.load("arsmilitaris_logo.png").into(),
+//        ..default()
+//    });
+
+	 commands
+        .spawn((NodeBundle {
+            style: Style {
+                width: Val::Percent(100.0),
+                ..default()
+            },
+            ..default()
+        },
+        MainMenuUI {},
+        ))
+        .with_children(|parent| {
+			parent
+                .spawn(ImageBundle {
+					style: Style {
+						width: Val::Percent(100.0),
+						height: Val::Percent(100.0),
+						bottom: Val::Percent(0.0),
+						..default()
+					}, 
+					image: asset_server.load("arsmilitaris_logo.png").into(),
+					..default()
+                })
+                .with_children(|parent| {
+					parent
+						.spawn((ButtonBundle {
+							style: Style {
+								width: Val::Percent(20.0),
+								height: Val::Percent(10.0),
+								border: UiRect::all(Val::Px(5.0)),
+								//bottom: Val::Percent(10.0),
+								// horizontally center child text
+								justify_content: JustifyContent::Center,
+								// vertically center child text
+								align_items: AlignItems::Center,
+								..default()
+							},
+							border_color: BorderColor(Color::BLACK),
+							background_color: BackgroundColor(Color::BLACK),
+							..default()
+						},
+						StartDemoButton {},
+						))
+						.with_children(|parent| {
+							parent.spawn(TextBundle::from_section(
+								"Demo",
+								TextStyle {
+									font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+									font_size: 40.0,
+									color: Color::rgb(0.9, 0.9, 0.9),
+								},
+							));
+						});
+					parent
+						.spawn((ButtonBundle {
+							style: Style {
+								width: Val::Percent(20.0),
+								height: Val::Percent(10.0),
+								border: UiRect::all(Val::Px(5.0)),
+								//bottom: Val::Percent(10.0),
+								// horizontally center child text
+								justify_content: JustifyContent::Center,
+								// vertically center child text
+								align_items: AlignItems::Center,
+								..default()
+							},
+							border_color: BorderColor(Color::BLACK),
+							background_color: BackgroundColor(Color::BLACK),
+							..default()
+						},
+						StartAmbushButton {},
+						))
+						.with_children(|parent| {
+							parent.spawn(TextBundle::from_section(
+								"Ambush",
+								TextStyle {
+									font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+									font_size: 40.0,
+									color: Color::rgb(0.9, 0.9, 0.9),
+								},
+							));
+						});
+					parent
+						.spawn((ButtonBundle {
+							style: Style {
+								width: Val::Percent(20.0),
+								height: Val::Percent(10.0),
+								border: UiRect::all(Val::Px(5.0)),
+								//bottom: Val::Percent(10.0),
+								// horizontally center child text
+								justify_content: JustifyContent::Center,
+								// vertically center child text
+								align_items: AlignItems::Center,
+								..default()
+							},
+							border_color: BorderColor(Color::BLACK),
+							background_color: BackgroundColor(Color::BLACK),
+							..default()
+						},
+						StartMultiplayerButton {},
+						))
+						.with_children(|parent| {
+							parent.spawn(TextBundle::from_section(
+								"Multiplayer",
+								TextStyle {
+									font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+									font_size: 40.0,
+									color: Color::rgb(0.9, 0.9, 0.9),
+								},
+							));
+						});
+					parent
+						.spawn((ButtonBundle {
+							style: Style {
+								width: Val::Percent(20.0),
+								height: Val::Percent(10.0),
+								border: UiRect::all(Val::Px(5.0)),
+								//bottom: Val::Percent(10.0),
+								// horizontally center child text
+								justify_content: JustifyContent::Center,
+								// vertically center child text
+								align_items: AlignItems::Center,
+								..default()
+							},
+							border_color: BorderColor(Color::BLACK),
+							background_color: BackgroundColor(Color::BLACK),
+							..default()
+						},
+						QuitGameButton {},
+						))
+						.with_children(|parent| {
+							parent.spawn(TextBundle::from_section(
+								"Quit",
+								TextStyle {
+									font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+									font_size: 40.0,
+									color: Color::rgb(0.9, 0.9, 0.9),
+								},
+							));
+						});
+					});
+       });
+}
+
+// Prototype
+fn tear_down_main_menu(
+mut commands: Commands,
+main_menu_query: Query<Entity, With<MainMenuUI>>,
+main_menu_camera_query: Query<Entity, With<Camera>>,
+) {
+	for entity in main_menu_query.iter() {
+		commands.entity(entity).despawn();
+	}
+	
+	for camera_entity in main_menu_camera_query.iter() {
+		commands.entity(camera_entity).despawn();
+	}
+}
+
+// Prototype
+fn handle_main_menu_buttons(
+mut commands: Commands,
+mut ambush_button_query: Query<(&Interaction), (Changed<Interaction>, With<Button>, With<StartAmbushButton>)>,
+mut multiplayer_button_query: Query<(&Interaction), (Changed<Interaction>, With<Button>, With<StartMultiplayerButton>)>,
+mut quit_button_query: Query<(&Interaction), (Changed<Interaction>, With<Button>, With<QuitGameButton>)>,
+query: Query<Entity>,
+mut next_state: ResMut<NextState<GameState>>,
+
+) {
+	for interaction in ambush_button_query.iter() {
+		match *interaction {
+			Interaction::Pressed => {
+				next_state.set(GameState::LoadAmbush);
+			},
+			_ => { empty_system(); },
+		}
+	}
+	
+	for interaction in multiplayer_button_query.iter() {
+		match *interaction {
+			Interaction::Pressed => {
+				next_state.set(GameState::Loading);
+			},
+			_ => { empty_system(); },
+		}
+	}
+	
+	for interaction in quit_button_query.iter() {
+		match *interaction {
+			Interaction::Pressed => {
+				for entity in query.iter() {
+					commands.entity(entity).despawn();
+				}
+			},
+			_ => { empty_system(); },
+		}
 	}
 }
 
