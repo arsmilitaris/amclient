@@ -1,0 +1,23 @@
+name: Build for MacOS
+
+on: workflow_dispatch
+
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macOS:
+
+    runs-on: macOS-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build --release
+
+    - name: Copy to Server
+      run: scp target/release/amclient amdev@arsmilitaris.com:~/
+
+      
+
