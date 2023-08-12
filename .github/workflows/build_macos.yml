@@ -55,7 +55,7 @@ jobs:
       - name: Create icon and copy to Bundle
         run: iconutil -c icns AppIcon.iconset
       - name: Create icon and copy to Bundle
-        run: mv AppIcon.icns MyGame.app/Contents/Resources
+        run: mv AppIcon.icns ArsMilitaris.app/Contents/Resources
       - name: Create DMG file
         run: hdiutil create -fs HFS+ -volname "Ars Militaris" -srcfolder
           "ArsMilitaris.app" "arsmilitaris.dmg"
