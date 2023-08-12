@@ -6,23 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { path = "../bevy_am" }
+bevy = { path = "../amengine/bevy_am" }
 csv = "1.1.6"
-bevy_quinnet = { path = "../bevy_quinnet_am" }
+bevy_quinnet = { path = "../amengine/bevy_quinnet" }
 serde = "1.0.152"
 image = "0.24.6"
 winit = "0.28.6"
-bevy_egui = { path = "../bevy_egui" }
-bevy-inspector-egui = { path = "../bevy-inspector-egui/crates/bevy-inspector-egui" }
+bevy_egui = { path = "../amengine/bevy_egui" }
+bevy-inspector-egui = { path = "../amengine/bevy-inspector-egui/crates/bevy-inspector-egui" }
 #bevy_console = "0.8.0"
-bevy_console = { path = "../bevy_console" }
+bevy_console = { path = "../amengine/bevy_console" }
 clap = { version = "=4.1.10", features = ["derive"]}
 tracing = "0.1.26"
 tracing-subscriber = "0.3.17"
-tracing-appender = { path = "../tracing/tracing-appender" }
+tracing-appender = { path = "../amengine/tracing/tracing-appender" }
 bevy_utils = "0.11.0"
 chrono = "0.4.24"
-bevy_log = { path = "../bevy_am/crates/bevy_log" }
+bevy_log = { path = "../amengine/bevy_am/crates/bevy_log" }
 rand = "0.8"
 pathfinding = "1.1"
 
