@@ -7,9 +7,9 @@ jobs:
   build-macOS:
     runs-on: macOS-latest
     steps:
+      - uses: actions/checkout@v3
       - name: Get `amengine`
         run: git clone https://github.com/arsmilitaris/amengine.git
-      - uses: actions/checkout@v3
       - name: Add Rust macOS Intel target
         run: rustup target add x86_64-apple-darwin
       - name: Add Rust macOS Apple Silicon target
