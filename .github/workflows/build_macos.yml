@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Get `amengine`
-        run: git clone https://github.com/arsmilitaris/amengine.git
+        run: git clone https://github.com/arsmilitaris/amengine.git ../amengine
       - name: Add Rust macOS Intel target
         run: rustup target add x86_64-apple-darwin
       - name: Add Rust macOS Apple Silicon target
