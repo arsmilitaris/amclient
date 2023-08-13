@@ -557,7 +557,11 @@ fn main() {
 	app.init_resource::<Game>();
 	app.init_resource::<ClientData>();
 	app.init_resource::<DemoData>();
-	app.add_systems(Startup, set_window_icon);
+	
+	if cfg!(windows) {
+		app.add_systems(Startup, set_window_icon);
+	} 
+	
 	app.add_systems(OnEnter(GameState::MainMenu),
 		(start_connection, send_get_client_id_message)
 			.chain()
