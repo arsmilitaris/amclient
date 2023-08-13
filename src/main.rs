@@ -503,224 +503,224 @@ struct DemoData {
 fn main() {
 	std::panic::set_hook(Box::new(custom_panic_hook));
 	
-    App::new()
-		.add_plugins(
-			DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Ars Militaris".into(),
-                    ..default()
-                }),
-                ..default()
-            })
-            .set(LogPlugin {
-				file_appender_settings: Some(FileAppenderSettings {
-					prefix: String::from("amclient.log"),
-					rolling: Rolling::Minutely,
-					..default()
-				}),
+    let mut app = App::new();
+	app.add_plugins(
+		DefaultPlugins.set(WindowPlugin {
+			primary_window: Some(Window {
+				title: "Ars Militaris".into(),
 				..default()
-            })
-        )
-		.add_plugin(QuinnetClientPlugin::default())
-		.add_plugins(ConsolePlugin)
+			}),
+			..default()
+		})
+		.set(LogPlugin {
+			file_appender_settings: Some(FileAppenderSettings {
+				prefix: String::from("amclient.log"),
+				rolling: Rolling::Minutely,
+				..default()
+			}),
+			..default()
+		})
+	);
+	app.add_plugin(QuinnetClientPlugin::default());
+	app.add_plugins(ConsolePlugin)
 		.insert_resource(ConsoleConfiguration {
 			// Override config here.
 			keys: vec![ToggleConsoleKey::KeyCode(KeyCode::Backslash)],
 			..Default::default()
-		})
-//		.add_plugin(WorldInspectorPlugin::new())
-		.register_type::<ConsoleConfiguration>()
-		.register_type::<HPCurrent>()
-		.register_type::<UnitActions>()
-		.register_type::<UnitAction>()
-		.register_type::<UnitActionTuple>()
-		.register_type::<Pos>()
-		.register_type::<DIR>()
-		.register_type::<MovementRange>()
-		.register_type::<AttackRange>()
-		.register_type::<AttackType>()
-//		.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default())
-//		.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default())
-//		.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default())
-//		.add_plugin(ResourceInspectorPlugin::<NextState<GameState>>::default())
-//		.add_plugin(ResourceInspectorPlugin::<NextState<TurnState>>::default())
-		.add_console_command::<DoNothingCommand, _>(do_nothing_command)
-		.add_console_command::<TalkCommand, _>(talk_command)
-		.add_console_command::<MoveCommand, _>(move_command)
-		.add_state::<GameState>()
-		.add_state::<TurnState>()
-		.add_event::<GameStartEvent>()
-		.add_event::<MapReadEvent>()
-		.add_event::<MapSetupEvent>()
-		.add_event::<UnitsReadEvent>()
-		.add_event::<UnitsGeneratedEvent>()
-		.init_resource::<Game>()
-		.init_resource::<ClientData>()
-		.init_resource::<DemoData>()
-		.add_systems(Startup, set_window_icon)
-		.add_systems(OnEnter(GameState::MainMenu),
-			(start_connection, send_get_client_id_message)
-				.chain()
-		)
-		.add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
-		.add_systems(OnExit(GameState::MainMenu), tear_down_main_menu)
-		.add_systems(Update, handle_main_menu_buttons
+		});
+//	app.add_plugin(WorldInspectorPlugin::new());
+	app.register_type::<ConsoleConfiguration>();
+	app.register_type::<HPCurrent>();
+	app.register_type::<UnitActions>();
+	app.register_type::<UnitAction>();
+	app.register_type::<UnitActionTuple>();
+	app.register_type::<Pos>();
+	app.register_type::<DIR>();
+	app.register_type::<MovementRange>();
+	app.register_type::<AttackRange>();
+	app.register_type::<AttackType>();
+//	app.add_plugin(ResourceInspectorPlugin::<ConsoleConfiguration>::default());
+//	app.add_plugin(ResourceInspectorPlugin::<State<GameState>>::default());
+//	app.add_plugin(ResourceInspectorPlugin::<State<TurnState>>::default());
+//	app.add_plugin(ResourceInspectorPlugin::<NextState<GameState>>::default());
+//	app.add_plugin(ResourceInspectorPlugin::<NextState<TurnState>>::default());
+	app.add_console_command::<DoNothingCommand, _>(do_nothing_command);
+	app.add_console_command::<TalkCommand, _>(talk_command);
+	app.add_console_command::<MoveCommand, _>(move_command);
+	app.add_state::<GameState>();
+	app.add_state::<TurnState>();
+	app.add_event::<GameStartEvent>();
+	app.add_event::<MapReadEvent>();
+	app.add_event::<MapSetupEvent>();
+	app.add_event::<UnitsReadEvent>();
+	app.add_event::<UnitsGeneratedEvent>();
+	app.init_resource::<Game>();
+	app.init_resource::<ClientData>();
+	app.init_resource::<DemoData>();
+	app.add_systems(Startup, set_window_icon);
+	app.add_systems(OnEnter(GameState::MainMenu),
+		(start_connection, send_get_client_id_message)
+			.chain()
+	);
+	app.add_systems(OnEnter(GameState::MainMenu), setup_main_menu);
+	app.add_systems(OnExit(GameState::MainMenu), tear_down_main_menu);
+	app.add_systems(Update, handle_main_menu_buttons
+		.run_if(in_state(GameState::MainMenu))
+	);
+	app.add_systems(Update,
+		(send_start_game_message_system, handle_server_messages)
 			.run_if(in_state(GameState::MainMenu))
-		)
-		.add_systems(Update,
-			(send_start_game_message_system, handle_server_messages)
-				.run_if(in_state(GameState::MainMenu))
-		)
-		.add_systems(Update,
-			//(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system, handle_player_turn_server_message)
-			(read_map_system, setup_map_system, read_battle_system, (generate_units_system, apply_deferred).chain(),  place_units_on_map_system)
-				.run_if(in_state(GameState::Loading))
-		)
-		.add_systems(OnExit(GameState::Loading), init_cursor_system)
-		.add_systems(OnExit(GameState::Loading), setup_game_resource_system)
-		.add_systems(OnEnter(GameState::LoadingComplete), loading_complete)
-		.add_systems(OnEnter(GameState::Battle), (apply_deferred, setup_cursor_system).chain())
-		.add_systems(Update,
-			(move_cursor_system, end_turn_system, (apply_state_transition::<GameState>, handle_player_turn_server_message, apply_state_transition::<GameState>).chain())
-				.run_if(in_state(GameState::Battle))
-		)
-		.add_systems(OnExit(GameState::Battle), remove_cursor_system)
-		.add_systems(Update, handle_player_turn_server_message
-			.run_if(in_state(GameState::Wait))
-		)
-		.add_systems(OnEnter(GameState::LoadAmbush), setup_grid_system)
-		.add_systems(OnEnter(GameState::LoadAmbush), setup_camera_system)
-		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, setup_text_system)
-			.chain()
-			.after(setup_grid_system)
-		)
-		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, spawn_units)
-			.chain()
-			.after(setup_text_system)
-		)
-		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_order_system)
-			.chain()
-			.after(setup_text_system)
-		)
-		.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_unit_order_system)
-			.after(spawn_units)
-		)
-		.add_systems(OnExit(GameState::LoadAmbush), handle_unit_directions)
-		.add_systems(Update, z_order_system
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, z_unit_order_system
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, handle_unit_directions
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, handle_unit_directions
-			.run_if(in_state(GameState::Move))
-		)
-		.add_systems(Update, handle_unit_death
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, handle_ambush_game_over
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(OnTransition { from: GameState::Ambush, to: GameState::MainMenu, }, handle_ambush_to_main_menu_transition)
-		.add_systems(Update, position_cursor
-			.run_if(in_state(TurnState::Turn))
-		)
-		.add_systems(OnEnter(GameState::LoadAmbush), init_cursor_system)
-		.add_systems(OnEnter(TurnState::Turn), setup_cursor_system_2)
-		.add_systems(OnEnter(TurnState::ChooseMove), setup_cursor_system_2)
-		.add_systems(OnExit(TurnState::Turn), hide_cursor)
-		.add_systems(Update, move_cursor_2
-			.run_if(in_state(TurnState::Turn))
-		)
-		.add_systems(Update, move_cursor_2
-			.run_if(in_state(TurnState::ChooseMove))
-		)
-		.add_systems(Update, position_cursor
-			.run_if(in_state(TurnState::ChooseMove))
-		)
-		.add_systems(Update, move_cursor_2
-			.run_if(in_state(TurnState::ChooseAttack))
-		)
-		.add_systems(Update, position_cursor
-			.run_if(in_state(TurnState::ChooseAttack))
-		)
-		.add_systems(Update, tick_move_timer
-			.run_if(in_state(GameState::Move))
-		)
-		.add_systems(Update, move_camera_system
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, move_camera_system
-			.run_if(in_state(GameState::Move))
-		)
-		//.add_systems(OnEnter(GameState::Ambush), ars_militaris_demo)
-		.add_systems(Update, single_player_pause)
-		.add_systems(Update, handle_single_player_pause_state
-			.run_if(in_state(GameState::SinglePlayerPause))
-		)
-		.add_systems(Update, wait_turn_system
-			.run_if(in_state(GameState::Ambush))
-			.run_if(not(in_state(TurnState::Turn)))
-			.run_if(not(in_state(TurnState::ChooseMove)))
-			.run_if(not(in_state(TurnState::ChooseAttack)))
-			.run_if(not(in_state(TurnState::AI)))
-		)
-		.add_systems(Update, end_turn_single_player
-			.run_if(in_state(TurnState::Turn))
-		)
-		.add_systems(Update, first_ai
-			.run_if(in_state(TurnState::AI))
-		)
-		.add_systems(OnEnter(TurnState::ChooseMove), choose_move)
-		.add_systems(Update, start_choose_move
-			.run_if(in_state(TurnState::Turn))
-		)
-		.add_systems(Update, handle_choose_move
-			.run_if(in_state(TurnState::ChooseMove))
-		)
-		.add_systems(OnEnter(TurnState::ChooseAttack), choose_attack)
-		.add_systems(Update, start_choose_attack
-			.run_if(in_state(TurnState::Turn))
-		)
-		.add_systems(Update, handle_choose_attack
-			.run_if(in_state(TurnState::ChooseAttack))
-		)
-		.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system)
-//		.add_systems(Update, move_gaul_warrior
-//			.run_if(in_state(GameState::Ambush))
-//			//.run_if(warrior_already_spawned)
-//		)
-		.add_systems(Update, (process_unit_actions, apply_deferred)
-			.chain()
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, (apply_deferred, process_move_actions, apply_deferred)
-			.chain()
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, (apply_deferred, handle_move_state, apply_deferred)
-			.chain()
-			.run_if(in_state(GameState::Move))
-		)
-		.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
-			.chain()
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, handle_talk_state
-			.run_if(in_state(GameState::Talk))
-		)
-		.add_systems(Update, (apply_deferred, process_basic_attack_actions, apply_deferred)
-			.chain()
-			.run_if(in_state(GameState::Ambush))
-		)
-		.add_systems(Update, center_camera_on_unit
-			.run_if(in_state(GameState::Move))
-		)
-		.add_systems(Startup, get_toggle_console_key)
-		.run();
+	);
+	app.add_systems(Update,
+		//(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system, handle_player_turn_server_message)
+		(read_map_system, setup_map_system, read_battle_system, (generate_units_system, apply_deferred).chain(),  place_units_on_map_system)
+			.run_if(in_state(GameState::Loading))
+	);
+	app.add_systems(OnExit(GameState::Loading), init_cursor_system);
+	app.add_systems(OnExit(GameState::Loading), setup_game_resource_system);
+	app.add_systems(OnEnter(GameState::LoadingComplete), loading_complete);
+	app.add_systems(OnEnter(GameState::Battle), (apply_deferred, setup_cursor_system).chain());
+	app.add_systems(Update,
+		(move_cursor_system, end_turn_system, (apply_state_transition::<GameState>, handle_player_turn_server_message, apply_state_transition::<GameState>).chain())
+			.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(OnExit(GameState::Battle), remove_cursor_system);
+	app.add_systems(Update, handle_player_turn_server_message
+		.run_if(in_state(GameState::Wait))
+	);
+	app.add_systems(OnEnter(GameState::LoadAmbush), setup_grid_system);
+	app.add_systems(OnEnter(GameState::LoadAmbush), setup_camera_system);
+	app.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, setup_text_system)
+		.chain()
+		.after(setup_grid_system)
+	);
+	app.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, spawn_units)
+		.chain()
+		.after(setup_text_system)
+	);
+	app.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_order_system)
+		.chain()
+		.after(setup_text_system)
+	);
+	app.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, z_unit_order_system)
+		.after(spawn_units)
+	);
+	app.add_systems(OnExit(GameState::LoadAmbush), handle_unit_directions);
+	app.add_systems(Update, z_order_system
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, z_unit_order_system
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, handle_unit_directions
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, handle_unit_directions
+		.run_if(in_state(GameState::Move))
+	);
+	app.add_systems(Update, handle_unit_death
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, handle_ambush_game_over
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(OnTransition { from: GameState::Ambush, to: GameState::MainMenu, }, handle_ambush_to_main_menu_transition);
+	app.add_systems(Update, position_cursor
+		.run_if(in_state(TurnState::Turn))
+	);
+	app.add_systems(OnEnter(GameState::LoadAmbush), init_cursor_system);
+	app.add_systems(OnEnter(TurnState::Turn), setup_cursor_system_2);
+	app.add_systems(OnEnter(TurnState::ChooseMove), setup_cursor_system_2);
+	app.add_systems(OnExit(TurnState::Turn), hide_cursor);
+	app.add_systems(Update, move_cursor_2
+		.run_if(in_state(TurnState::Turn))
+	);
+	app.add_systems(Update, move_cursor_2
+		.run_if(in_state(TurnState::ChooseMove))
+	);
+	app.add_systems(Update, position_cursor
+		.run_if(in_state(TurnState::ChooseMove))
+	);
+	app.add_systems(Update, move_cursor_2
+		.run_if(in_state(TurnState::ChooseAttack))
+	);
+	app.add_systems(Update, position_cursor
+		.run_if(in_state(TurnState::ChooseAttack))
+	);
+	app.add_systems(Update, tick_move_timer
+		.run_if(in_state(GameState::Move))
+	);
+	app.add_systems(Update, move_camera_system
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, move_camera_system
+		.run_if(in_state(GameState::Move))
+	);
+	//app.add_systems(OnEnter(GameState::Ambush), ars_militaris_demo);
+	app.add_systems(Update, single_player_pause);
+	app.add_systems(Update, handle_single_player_pause_state
+		.run_if(in_state(GameState::SinglePlayerPause))
+	);
+	app.add_systems(Update, wait_turn_system
+		.run_if(in_state(GameState::Ambush))
+		.run_if(not(in_state(TurnState::Turn)))
+		.run_if(not(in_state(TurnState::ChooseMove)))
+		.run_if(not(in_state(TurnState::ChooseAttack)))
+		.run_if(not(in_state(TurnState::AI)))
+	);
+	app.add_systems(Update, end_turn_single_player
+		.run_if(in_state(TurnState::Turn))
+	);
+	app.add_systems(Update, first_ai
+		.run_if(in_state(TurnState::AI))
+	);
+	app.add_systems(OnEnter(TurnState::ChooseMove), choose_move);
+	app.add_systems(Update, start_choose_move
+		.run_if(in_state(TurnState::Turn))
+	);
+	app.add_systems(Update, handle_choose_move
+		.run_if(in_state(TurnState::ChooseMove))
+	);
+	app.add_systems(OnEnter(TurnState::ChooseAttack), choose_attack);
+	app.add_systems(Update, start_choose_attack
+		.run_if(in_state(TurnState::Turn))
+	);
+	app.add_systems(Update, handle_choose_attack
+		.run_if(in_state(TurnState::ChooseAttack))
+	);
+	app.add_systems(OnEnter(GameState::LoadAmbush), setup_game_resource_system);
+//	app.add_systems(Update, move_gaul_warrior
+//		.run_if(in_state(GameState::Ambush))
+//		//.run_if(warrior_already_spawned)
+//	);
+	app.add_systems(Update, (process_unit_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, (apply_deferred, process_move_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, (apply_deferred, handle_move_state, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Move))
+	);
+	app.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, handle_talk_state
+		.run_if(in_state(GameState::Talk))
+	);
+	app.add_systems(Update, (apply_deferred, process_basic_attack_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, center_camera_on_unit
+		.run_if(in_state(GameState::Move))
+	);
+	app.add_systems(Startup, get_toggle_console_key);
+	app.run();
 }
 
 // SYSTEMS
