@@ -30,6 +30,8 @@ jobs:
         run: cp Info.plist "ArsMilitaris.app/Contents/Info.plist"
       - name: Copy assets directory to Bundle
         run: cp -a assets "ArsMilitaris.app/Contents/MacOS/"
+      - name: Copy src directory to Bundle
+        run: cp -a src "ArsMilitaris.app/Contents/MacOS/"
       - name: Create icon and copy to Bundle
         run: mkdir -p AppIcon.iconset
       - name: Create icon and copy to Bundle
