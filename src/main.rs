@@ -3268,6 +3268,7 @@ mut ambush_button_query: Query<(&Interaction), (Changed<Interaction>, With<Butto
 mut multiplayer_button_query: Query<(&Interaction), (Changed<Interaction>, With<Button>, With<StartMultiplayerButton>)>,
 mut quit_button_query: Query<(&Interaction), (Changed<Interaction>, With<Button>, With<QuitGameButton>)>,
 query: Query<Entity>,
+client: Res<Client>,
 mut next_state: ResMut<NextState<GameState>>,
 
 ) {
@@ -3283,7 +3284,9 @@ mut next_state: ResMut<NextState<GameState>>,
 	for interaction in multiplayer_button_query.iter() {
 		match *interaction {
 			Interaction::Pressed => {
-				next_state.set(GameState::Loading);
+				client
+					.connection()
+					.try_send_message(ClientMessage::StartGame);
 			},
 			_ => { empty_system(); },
 		}
