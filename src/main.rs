@@ -470,6 +470,7 @@ struct Game {
 	current_team: usize,
 	players: HashMap<usize, ControlledBy>,
 	winner: ControlledBy,
+	is_multiplayer: bool,
 }
 
 impl Default for Game {
@@ -478,7 +479,8 @@ impl Default for Game {
             current_unit: 0,
             current_team: 1,
             players: HashMap::new(),
-            winner: ControlledBy::None, 
+            winner: ControlledBy::None,
+            is_multiplayer: false, 
         }
     }
 }
@@ -575,23 +577,44 @@ fn main() {
 		(send_start_game_message_system, handle_server_messages)
 			.run_if(in_state(GameState::MainMenu))
 	);
-	app.add_systems(Update,
-		//(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system, handle_player_turn_server_message)
-		(read_map_system, setup_map_system, read_battle_system, (generate_units_system, apply_deferred).chain(),  place_units_on_map_system)
-			.run_if(in_state(GameState::Loading))
-	);
-	app.add_systems(OnExit(GameState::Loading), init_cursor_system);
-	app.add_systems(OnExit(GameState::Loading), setup_game_resource_system);
+//	app.add_systems(Update,
+//		//(read_map_system, setup_map_system, read_battle_system, generate_units_system,  place_units_on_map_system, handle_player_turn_server_message)
+//		(read_map_system, setup_map_system, read_battle_system, (generate_units_system, apply_deferred).chain(),  place_units_on_map_system)
+//			.run_if(in_state(GameState::Loading))
+//	);
+//	app.add_systems(OnExit(GameState::Loading), init_cursor_system);
+//	app.add_systems(OnExit(GameState::Loading), setup_game_resource_system_multiplayer);
 	app.add_systems(OnEnter(GameState::LoadingComplete), loading_complete);
-	app.add_systems(OnEnter(GameState::Battle), (apply_deferred, setup_cursor_system).chain());
+//	app.add_systems(OnEnter(GameState::Battle), (apply_deferred, setup_cursor_system).chain());
 	app.add_systems(Update,
-		(move_cursor_system, end_turn_system, (apply_state_transition::<GameState>, handle_player_turn_server_message, apply_state_transition::<GameState>).chain())
+		(end_turn_system, (apply_state_transition::<GameState>, handle_player_turn_server_message, apply_state_transition::<GameState>).chain())
 			.run_if(in_state(GameState::Battle))
 	);
-	app.add_systems(OnExit(GameState::Battle), remove_cursor_system);
 	app.add_systems(Update, handle_player_turn_server_message
 		.run_if(in_state(GameState::Wait))
 	);
+	app.add_systems(OnEnter(GameState::Loading), setup_grid_system);
+	app.add_systems(OnEnter(GameState::Loading), setup_camera_system);
+	app.add_systems(OnEnter(GameState::Loading), (apply_deferred, setup_text_system)
+		.chain()
+		.after(setup_grid_system)
+	);
+	app.add_systems(OnEnter(GameState::Loading), (apply_deferred, spawn_units)
+		.chain()
+		.after(setup_text_system)
+	);
+	app.add_systems(OnEnter(GameState::Loading), (apply_deferred, z_order_system)
+		.chain()
+		.after(setup_text_system)
+	);
+	app.add_systems(OnEnter(GameState::Loading), (apply_deferred, z_unit_order_system)
+		.after(spawn_units)
+	);
+	app.add_systems(Update, set_loading_complete
+		.run_if(in_state(GameState::Loading))
+	);
+	app.add_systems(OnExit(GameState::Loading), handle_unit_directions);
+	app.add_systems(OnExit(GameState::Loading), setup_game_resource_system);
 	app.add_systems(OnEnter(GameState::LoadAmbush), setup_grid_system);
 	app.add_systems(OnEnter(GameState::LoadAmbush), setup_camera_system);
 	app.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, setup_text_system)
@@ -628,11 +651,27 @@ fn main() {
 	app.add_systems(Update, handle_ambush_game_over
 		.run_if(in_state(GameState::Ambush))
 	);
+	app.add_systems(Update, z_order_system
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, z_unit_order_system
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, handle_unit_directions
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, handle_unit_death
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, handle_ambush_game_over
+		.run_if(in_state(GameState::Battle))
+	);
 	app.add_systems(OnTransition { from: GameState::Ambush, to: GameState::MainMenu, }, handle_ambush_to_main_menu_transition);
 	app.add_systems(Update, position_cursor
 		.run_if(in_state(TurnState::Turn))
 	);
 	app.add_systems(OnEnter(GameState::LoadAmbush), init_cursor_system);
+	app.add_systems(OnEnter(GameState::Loading), init_cursor_system);
 	app.add_systems(OnEnter(TurnState::Turn), setup_cursor_system_2);
 	app.add_systems(OnEnter(TurnState::ChooseMove), setup_cursor_system_2);
 	app.add_systems(OnExit(TurnState::Turn), hide_cursor);
@@ -660,6 +699,12 @@ fn main() {
 	app.add_systems(Update, move_camera_system
 		.run_if(in_state(GameState::Move))
 	);
+	app.add_systems(Update, move_camera_system
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, move_camera_system
+		.run_if(in_state(GameState::Wait))
+	);
 	//app.add_systems(OnEnter(GameState::Ambush), ars_militaris_demo);
 	app.add_systems(Update, single_player_pause);
 	app.add_systems(Update, handle_single_player_pause_state
@@ -674,6 +719,7 @@ fn main() {
 	);
 	app.add_systems(Update, end_turn_single_player
 		.run_if(in_state(TurnState::Turn))
+		.run_if(not(is_multiplayer))
 	);
 	app.add_systems(Update, first_ai
 		.run_if(in_state(TurnState::AI))
@@ -719,6 +765,22 @@ fn main() {
 	app.add_systems(Update, (apply_deferred, process_basic_attack_actions, apply_deferred)
 		.chain()
 		.run_if(in_state(GameState::Ambush))
+	);
+	app.add_systems(Update, (process_unit_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, (apply_deferred, process_move_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, (apply_deferred, process_talk_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Battle))
+	);
+	app.add_systems(Update, (apply_deferred, process_basic_attack_actions, apply_deferred)
+		.chain()
+		.run_if(in_state(GameState::Battle))
 	);
 	app.add_systems(Update, center_camera_on_unit
 		.run_if(in_state(GameState::Move))
@@ -1025,267 +1087,6 @@ asset_server: Res<AssetServer>,
 	}
 }
 
-// Client 
-fn remove_cursor_system(cursors: Query<&Cursor>, mut tiles: Query<(&Tile, &Pos, &mut Text)>) {
-	info!("DEBUG: Removing cursor...");
-	for cursor in cursors.iter() {
-		for (tile, pos, mut text) in tiles.iter_mut() {
-			if pos.x == cursor.x && pos.y == cursor.y {
-				// Remove cursor from tile.
-				
-				// Remove [ and ] from tile.
-				let mut tile_string = &text.sections[0].value;
-				let mut tile_string_split = tile_string.split("[");
-				let vec = tile_string_split.collect::<Vec<&str>>();
-				let mut tile_string_split_2 = vec[1].split("]");
-				let vec2 = tile_string_split_2.collect::<Vec<&str>>();
-				let new_tile_string = vec2[0];
-				
-				// Assign new string to tile.
-				text.sections[0].value = new_tile_string.to_string();
-			}
-		}
-	}
-}
-
-// Client
-fn move_cursor_system(input: Res<Input<KeyCode>>, mut cursors: Query<&mut Cursor>, mut tiles: Query<(&Tile, &Pos, &mut Text)>) {
-	
-	// Get cursor current position.
-	let mut cursor_position_x = 0;
-	let mut cursor_position_y = 0;
-	for cursor in cursors.iter_mut() {
-		cursor_position_x = cursor.x;
-		cursor_position_y = cursor.y;
-	}
-	
-	if input.just_pressed(KeyCode::A) {
-		
-		// Save the previous cursor position to later be used in removing the cursor.
-		let cursor_previous_x = cursor_position_x;
-		let cursor_previous_y = cursor_position_y;
-		
-		if cursor_position_y == 9 {
-			info!("DEBUG: You can't move the cursor there.");
-		} else {
-			
-		
-			// Find tile to the left of cursor.
-			for (tile, pos, mut text) in tiles.iter_mut() {
-				if pos.x == cursor_position_x && pos.y == cursor_position_y + 1 {
-					// Move the cursor to the new position.
-					info!("DEBUG: Found tile at coordinates {}, {}.", pos.x, pos.y);
-					
-					// Build cursor string.
-					let mut cursor_string = "[".to_owned();
-					cursor_string.push_str(&text.sections[0].value);
-					cursor_string.push_str("]");
-					text.sections[0].value = cursor_string;
-					
-					
-					
-					
-					// Update the cursor Entity.
-					for mut cursor in cursors.iter_mut() {
-						cursor.x = pos.x;
-						cursor.y = pos.y;
-
-					}
-				}
-			}
-			
-			// Remove the cursor from the previous tile.
-			for cursor in cursors.iter_mut() {
-				for (tile, pos, mut text) in tiles.iter_mut() {
-					if pos.x == cursor_previous_x && pos.y == cursor_previous_y {
-						// Remove [ and ] from tile.
-						let mut tile_string = &text.sections[0].value;
-						let mut tile_string_split = tile_string.split("[");
-						let vec = tile_string_split.collect::<Vec<&str>>();
-						let mut tile_string_split_2 = vec[1].split("]");
-						let vec2 = tile_string_split_2.collect::<Vec<&str>>();
-						let new_tile_string = vec2[0];
-						
-						// Assign new string to tile.
-						text.sections[0].value = new_tile_string.to_string();
-					}
-				}
-			}
-			
-			info!("DEBUG: Moving the cursor...");
-			
-		}
-	} else if input.just_pressed(KeyCode::D) {
-	
-		// Save the previous cursor position to later be used in removing the cursor.
-		let cursor_previous_x = cursor_position_x;
-		let cursor_previous_y = cursor_position_y;
-		
-		if cursor_position_y == 0 {
-			info!("DEBUG: You can't move the cursor there.");
-		} else {
-			
-		
-			// Find tile to the left of cursor.
-			for (tile, pos, mut text) in tiles.iter_mut() {
-				if pos.x == cursor_position_x && pos.y == cursor_position_y - 1 {
-					// Move the cursor to the new position.
-					info!("DEBUG: Found tile at coordinates {}, {}.", pos.x, pos.y);
-					
-					// Build cursor string.
-					let mut cursor_string = "[".to_owned();
-					cursor_string.push_str(&text.sections[0].value);
-					cursor_string.push_str("]");
-					text.sections[0].value = cursor_string;
-					
-					
-					
-					
-					// Update the cursor Entity.
-					for mut cursor in cursors.iter_mut() {
-						cursor.x = pos.x;
-						cursor.y = pos.y;
-
-					}
-				}
-			}
-			
-			// Remove the cursor from the previous tile.
-			for cursor in cursors.iter_mut() {
-				for (tile, pos, mut text) in tiles.iter_mut() {
-					if pos.x == cursor_previous_x && pos.y == cursor_previous_y {
-						// Remove [ and ] from tile.
-						let mut tile_string = &text.sections[0].value;
-						let mut tile_string_split = tile_string.split("[");
-						let vec = tile_string_split.collect::<Vec<&str>>();
-						let mut tile_string_split_2 = vec[1].split("]");
-						let vec2 = tile_string_split_2.collect::<Vec<&str>>();
-						let new_tile_string = vec2[0];
-						
-						// Assign new string to tile.
-						text.sections[0].value = new_tile_string.to_string();
-					}
-				}
-			}
-			
-			info!("DEBUG: Moving the cursor...");
-			
-		}
-	} else if input.just_pressed(KeyCode::W) {
-	
-		// Save the previous cursor position to later be used in removing the cursor.
-		let cursor_previous_x = cursor_position_x;
-		let cursor_previous_y = cursor_position_y;
-		
-		if cursor_position_x == 0 {
-			info!("DEBUG: You can't move the cursor there.");
-		} else {
-			
-		
-			// Find tile to the left of cursor.
-			for (tile, pos, mut text) in tiles.iter_mut() {
-				if pos.x == cursor_position_x - 1 && pos.y == cursor_position_y {
-					// Move the cursor to the new position.
-					info!("DEBUG: Found tile at coordinates {}, {}.", pos.x, pos.y);
-					
-					// Build cursor string.
-					let mut cursor_string = "[".to_owned();
-					cursor_string.push_str(&text.sections[0].value);
-					cursor_string.push_str("]");
-					text.sections[0].value = cursor_string;
-					
-					
-					
-					
-					// Update the cursor Entity.
-					for mut cursor in cursors.iter_mut() {
-						cursor.x = pos.x;
-						cursor.y = pos.y;
-
-					}
-				}
-			}
-			
-			// Remove the cursor from the previous tile.
-			for cursor in cursors.iter_mut() {
-				for (tile, pos, mut text) in tiles.iter_mut() {
-					if pos.x == cursor_previous_x && pos.y == cursor_previous_y {
-						// Remove [ and ] from tile.
-						let mut tile_string = &text.sections[0].value;
-						let mut tile_string_split = tile_string.split("[");
-						let vec = tile_string_split.collect::<Vec<&str>>();
-						let mut tile_string_split_2 = vec[1].split("]");
-						let vec2 = tile_string_split_2.collect::<Vec<&str>>();
-						let new_tile_string = vec2[0];
-						
-						// Assign new string to tile.
-						text.sections[0].value = new_tile_string.to_string();
-					}
-				}
-			}
-			
-			info!("DEBUG: Moving the cursor...");
-			
-		}
-	} else if input.just_pressed(KeyCode::S) {
-	
-		// Save the previous cursor position to later be used in removing the cursor.
-		let cursor_previous_x = cursor_position_x;
-		let cursor_previous_y = cursor_position_y;
-		
-		if cursor_position_x == 9 {
-			info!("DEBUG: You can't move the cursor there.");
-		} else {
-			
-		
-			// Find tile to the left of cursor.
-			for (tile, pos, mut text) in tiles.iter_mut() {
-				if pos.x == cursor_position_x + 1 && pos.y == cursor_position_y {
-					// Move the cursor to the new position.
-					info!("DEBUG: Found tile at coordinates {}, {}.", pos.x, pos.y);
-					
-					// Build cursor string.
-					let mut cursor_string = "[".to_owned();
-					cursor_string.push_str(&text.sections[0].value);
-					cursor_string.push_str("]");
-					text.sections[0].value = cursor_string;
-					
-					
-					
-					
-					// Update the cursor Entity.
-					for mut cursor in cursors.iter_mut() {
-						cursor.x = pos.x;
-						cursor.y = pos.y;
-
-					}
-				}
-			}
-			
-			// Remove the cursor from the previous tile.
-			for cursor in cursors.iter_mut() {
-				for (tile, pos, mut text) in tiles.iter_mut() {
-					if pos.x == cursor_previous_x && pos.y == cursor_previous_y {
-						// Remove [ and ] from tile.
-						let mut tile_string = &text.sections[0].value;
-						let mut tile_string_split = tile_string.split("[");
-						let vec = tile_string_split.collect::<Vec<&str>>();
-						let mut tile_string_split_2 = vec[1].split("]");
-						let vec2 = tile_string_split_2.collect::<Vec<&str>>();
-						let new_tile_string = vec2[0];
-						
-						// Assign new string to tile.
-						text.sections[0].value = new_tile_string.to_string();
-					}
-				}
-			}
-			
-			info!("DEBUG: Moving the cursor...");
-			
-		}
-	}
-}
-
 // Prototype
 fn move_cursor_2(
 map_query: Query<&Map>,
@@ -1471,6 +1272,22 @@ fn setup_game_resource_system(mut commands: Commands) {
 		current_team: 1,
 		players: players,
 		winner: ControlledBy::None,
+		is_multiplayer: false,
+	});
+}
+
+// Client
+fn setup_game_resource_system_multiplayer(mut commands: Commands) {
+	let mut players = HashMap::new();
+	players.insert(1, ControlledBy::Player);
+	players.insert(2, ControlledBy::Player);
+	
+	commands.insert_resource(Game {
+		current_unit: 0,
+		current_team: 1,
+		players: players,
+		winner: ControlledBy::None,
+		is_multiplayer: true,
 	});
 }
 
@@ -1502,6 +1319,7 @@ fn handle_server_messages(
     mut events: EventWriter<GameStartEvent>,
     mut commands: Commands,
     mut client_data: ResMut<ClientData>,
+    mut game: ResMut<Game>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
@@ -1517,6 +1335,9 @@ fn handle_server_messages(
 				next_state.set(GameState::Loading);
 				info!("DEBUG: Set GameState to Loading.");
 				events.send(GameStartEvent);
+				
+				// Set `Game` Resource `is_multiplayer` to true.
+				game.is_multiplayer = true;
 			},
 			ServerMessage::ClientId { client_id } => {
 				// Configure ClientId.
@@ -1544,9 +1365,10 @@ fn handle_player_turn_server_message(
 	mut client: ResMut<Client>,
 	mut commands: Commands,
 	client_data: Res<ClientData>,
-	mut units: Query<(&UnitId, &mut WTCurrent)>,
+	mut units: Query<(Entity, &UnitId, &mut WTCurrent)>,
 	mut game: ResMut<Game>,
 	mut next_state: ResMut<NextState<GameState>>,
+	mut next_turn_state: ResMut<NextState<TurnState>>,
 	state: Res<State<GameState>>,
 ) {
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
@@ -1558,6 +1380,13 @@ fn handle_player_turn_server_message(
 				info!("DEBUG: Setting current unit to {}.", current_unit);
 				game.current_unit = current_unit;
 				info!("DEBUG: Set current unit to {}.", game.current_unit);
+				
+				// Assign the `CurrentUnit` component to the current unit.
+				for (entity, unit_id, mut current_wt) in units.iter_mut() {
+					if unit_id.value == game.current_unit {
+						commands.entity(entity).insert(CurrentUnit {});
+					}
+				}
 				
 				if client_id == client_data.client_id {
 					// Set state to Battle.
@@ -1575,6 +1404,11 @@ fn handle_player_turn_server_message(
 					//}
 					next_state.set(GameState::Battle);
 					info!("DEBUG: Set GameState to Battle.");
+					
+					// Set `TurnState` to `Turn`.
+					info!("DEBUG: Setting TurnState to Turn...");
+					next_turn_state.set(TurnState::Turn);
+					info!("DEBUG: Set TurnState to Turn.");
 				} else {
 					// Set state to Wait.
 					info!("DEBUG: Setting GameState to Wait...");
@@ -1582,6 +1416,11 @@ fn handle_player_turn_server_message(
 					next_state.set(GameState::Wait);
 					info!("DEBUG: Set GameState to Wait.");
 					info!("DEBUG: Current state is {:?}.", state.get());
+					
+					// Set `TurnState` to `Wait`.
+					info!("DEBUG: Setting TurnState to Wait...");
+					next_turn_state.set(TurnState::Wait);
+					info!("DEBUG: Set TurnState to Wait.");
 				}
 			},
 			ServerMessage::WaitTurn { wait_turns } => {
@@ -1589,7 +1428,7 @@ fn handle_player_turn_server_message(
 				
 				// Update unit WTs.
 				for unit_wt in wait_turns {
-					for (unit_id, mut current_wt) in units.iter_mut() {
+					for (entity, unit_id, mut current_wt) in units.iter_mut() {
 						if unit_id.value == unit_wt.0.value {
 							current_wt.value = unit_wt.1.value;
 							break;
@@ -3302,6 +3141,21 @@ mut next_state: ResMut<NextState<GameState>>,
 			_ => { empty_system(); },
 		}
 	}
+}
+
+// Prototype
+fn set_loading_complete(
+mut next_state: ResMut<NextState<GameState>>) {
+	info!("DEBUG: Setting GameState to LoadingComplete...");
+	next_state.set(GameState::LoadingComplete);	
+	info!("DEBUG: Set GameState to LoadingComplete.");
+}
+
+// Prototype
+fn is_multiplayer(
+game: Res<Game>,
+) -> bool {
+	return game.is_multiplayer;
 }
 
 // Utility
