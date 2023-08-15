@@ -614,7 +614,6 @@ fn main() {
 		.run_if(in_state(GameState::Loading))
 	);
 	app.add_systems(OnExit(GameState::Loading), handle_unit_directions);
-	app.add_systems(OnExit(GameState::Loading), setup_game_resource_system);
 	app.add_systems(OnEnter(GameState::LoadAmbush), setup_grid_system);
 	app.add_systems(OnEnter(GameState::LoadAmbush), setup_camera_system);
 	app.add_systems(OnEnter(GameState::LoadAmbush), (apply_deferred, setup_text_system)
@@ -718,8 +717,7 @@ fn main() {
 		.run_if(not(in_state(TurnState::AI)))
 	);
 	app.add_systems(Update, end_turn_single_player
-		.run_if(in_state(TurnState::Turn))
-		.run_if(not(is_multiplayer))
+		.run_if(in_state(TurnState::Turn).and_then(is_singleplayer))
 	);
 	app.add_systems(Update, first_ai
 		.run_if(in_state(TurnState::AI))
@@ -1366,6 +1364,7 @@ fn handle_player_turn_server_message(
 	mut commands: Commands,
 	client_data: Res<ClientData>,
 	mut units: Query<(Entity, &UnitId, &mut WTCurrent)>,
+	mut current_unit_query: Query<(Entity), With<CurrentUnit>>,
 	mut game: ResMut<Game>,
 	mut next_state: ResMut<NextState<GameState>>,
 	mut next_turn_state: ResMut<NextState<TurnState>>,
@@ -1384,6 +1383,7 @@ fn handle_player_turn_server_message(
 				// Assign the `CurrentUnit` component to the current unit.
 				for (entity, unit_id, mut current_wt) in units.iter_mut() {
 					if unit_id.value == game.current_unit {
+						info!("DEBUG: Inserting `CurrentUnit` component into unit {}.", unit_id.value);
 						commands.entity(entity).insert(CurrentUnit {});
 					}
 				}
@@ -1444,11 +1444,22 @@ fn handle_player_turn_server_message(
 			ServerMessage::Wait => {
 				// Set state to Wait.
 				info!("DEBUG: Received Wait message.");
+				
+				// Remove the `CurrentUnit` component from the current unit.
+				for (entity) in current_unit_query.iter_mut() {
+					info!("DEBUG: Removing `CurrentUnit` component from unit.");
+					commands.entity(entity).remove::<CurrentUnit>();
+				}
+				
 				info!("DEBUG: Setting GameState to Wait...");
 				//commands.insert_resource(NextState(GameState::Wait));
 				next_state.set(GameState::Wait);
 				info!("DEBUG: Set GameState to Wait.");
 				info!("DEBUG: Current state is {:?}.", state.get());
+				
+				info!("DEBUG: Setting TurnState to Wait...");
+				next_turn_state.set(TurnState::Wait);
+				info!("DEBUG: Set TurnState to Wait.");
 			},
 			_ => { empty_system(); },
 		}
@@ -3156,6 +3167,13 @@ fn is_multiplayer(
 game: Res<Game>,
 ) -> bool {
 	return game.is_multiplayer;
+}
+
+// Prototype
+fn is_singleplayer(
+game: Res<Game>,
+) -> bool {
+	return !game.is_multiplayer;
 }
 
 // Utility
