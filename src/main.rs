@@ -74,6 +74,10 @@ enum ClientMessage {
 	LoadingComplete,
 	WaitTurnComplete,
 	Wait,
+	Move {
+		origin: Pos,
+		destination: Pos,
+	},
 }
 
 #[derive(Serialize, Deserialize)]
@@ -93,6 +97,10 @@ enum ServerMessage {
 		wait_turns: Vec<(UnitId, WTCurrent)>,
 	},
 	Wait,
+	Move {
+		origin: Pos,
+		destination: Pos,
+	},
 }
 
 #[derive(Reflect)]
@@ -278,7 +286,7 @@ struct GameText;
 #[derive(Component)]
 struct Unit;
 
-#[derive(Component, Clone, Reflect, Default, Eq, PartialEq, Hash, Copy, Debug)]
+#[derive(Component, Clone, Reflect, Default, Eq, PartialEq, Hash, Copy, Debug, Serialize, Deserialize)]
 #[reflect(Default)]
 struct Pos {
 	x: usize,
@@ -313,7 +321,7 @@ struct PosY { value: usize, }
 #[derive(Component)]
 struct WTMax { value: usize, }
 
-#[derive(Component, Clone, Serialize, Deserialize, Debug)]
+#[derive(Component, Reflect, Clone, Serialize, Deserialize, Debug)]
 struct WTCurrent { value: usize, }
 
 #[derive(Component)]
@@ -530,13 +538,14 @@ fn main() {
 			keys: vec![ToggleConsoleKey::KeyCode(KeyCode::Backslash)],
 			..Default::default()
 		});
-//	app.add_plugin(WorldInspectorPlugin::new());
+	app.add_plugin(WorldInspectorPlugin::new());
 	app.register_type::<ConsoleConfiguration>();
 	app.register_type::<HPCurrent>();
 	app.register_type::<UnitActions>();
 	app.register_type::<UnitAction>();
 	app.register_type::<UnitActionTuple>();
 	app.register_type::<Pos>();
+	app.register_type::<WTCurrent>();
 	app.register_type::<DIR>();
 	app.register_type::<MovementRange>();
 	app.register_type::<AttackRange>();
@@ -1364,7 +1373,7 @@ fn handle_player_turn_server_message(
 	mut commands: Commands,
 	client_data: Res<ClientData>,
 	mut units: Query<(Entity, &UnitId, &mut WTCurrent)>,
-	mut current_unit_query: Query<(Entity), With<CurrentUnit>>,
+	mut current_unit_query: Query<(Entity, &mut UnitActions), With<CurrentUnit>>,
 	mut game: ResMut<Game>,
 	mut next_state: ResMut<NextState<GameState>>,
 	mut next_turn_state: ResMut<NextState<TurnState>>,
@@ -1410,12 +1419,11 @@ fn handle_player_turn_server_message(
 					next_turn_state.set(TurnState::Turn);
 					info!("DEBUG: Set TurnState to Turn.");
 				} else {
-					// Set state to Wait.
-					info!("DEBUG: Setting GameState to Wait...");
-					//commands.insert_resource(NextState(GameState::Wait));
-					next_state.set(GameState::Wait);
-					info!("DEBUG: Set GameState to Wait.");
-					info!("DEBUG: Current state is {:?}.", state.get());
+					// Set state to Battle.
+					info!("DEBUG: Setting GameState to Battle...");
+					next_state.set(GameState::Battle);
+					info!("DEBUG: Set GameState to Battle.");
+					//info!("DEBUG: Current state is {:?}.", state.get());
 					
 					// Set `TurnState` to `Wait`.
 					info!("DEBUG: Setting TurnState to Wait...");
@@ -1431,7 +1439,7 @@ fn handle_player_turn_server_message(
 					for (entity, unit_id, mut current_wt) in units.iter_mut() {
 						if unit_id.value == unit_wt.0.value {
 							current_wt.value = unit_wt.1.value;
-							break;
+							//break;
 						}
 					}
 				}
@@ -1446,7 +1454,7 @@ fn handle_player_turn_server_message(
 				info!("DEBUG: Received Wait message.");
 				
 				// Remove the `CurrentUnit` component from the current unit.
-				for (entity) in current_unit_query.iter_mut() {
+				for (entity, mut unit_actions) in current_unit_query.iter_mut() {
 					info!("DEBUG: Removing `CurrentUnit` component from unit.");
 					commands.entity(entity).remove::<CurrentUnit>();
 				}
@@ -1461,6 +1469,19 @@ fn handle_player_turn_server_message(
 				next_turn_state.set(TurnState::Wait);
 				info!("DEBUG: Set TurnState to Wait.");
 			},
+			ServerMessage::Move { origin, destination } => {
+				info!("DEBUG: Received `Move` message from server.");
+				
+				// Insert `Move` `UnitAction` into current unit.
+				info!("DEBUG: Inserting `Move` `UnitAction` into current unit...");
+				let (entity, mut unit_actions) = current_unit_query.single_mut();
+				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+					origin: Pos { x: origin.x, y: origin.y, },
+					destination: Pos { x: destination.x, y: destination.y },
+					timer: Timer::from_seconds(4.0, TimerMode::Once),
+				}, 0.0));
+				info!("DEBUG: Finished inserting `Move` `UnitAction` into current unit.");
+			}
 			_ => { empty_system(); },
 		}
 	}
@@ -1917,15 +1938,24 @@ mut map_query: Query<&mut Map>,
 mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &MoveAction, &mut MoveActions, &mut DIR), Without<GameText>>,
 tile_transform_query: Query<&Transform, (With<GameText>, Without<Unit>)>,
 mut next_state: ResMut<NextState<GameState>>,
+game: Res<Game>,
 time: Res<Time>,
 ) {
 	let mut map_component = map_query.single_mut();
 	let mut map = &mut map_component.map;
 
 	if unit_query.iter_mut().len() == 0 {
-		info!("DEBUG: No MoveActions remaining. Setting GameState to Ambush.");
-		next_state.set(GameState::Ambush);
-		info!("DEBUG: No MoveActions remaining. Set GameState to Ambush.");
+		if !game.is_multiplayer {
+			// Game is in Single-Player mode.
+			info!("DEBUG: No MoveActions remaining. Setting GameState to Ambush.");
+			next_state.set(GameState::Ambush);
+			info!("DEBUG: No MoveActions remaining. Set GameState to Ambush.");
+		} else {
+			// Game is in Multiplayer mode.
+			info!("DEBUG: No MoveActions remaining. Setting GameState to Battle.");
+			next_state.set(GameState::Battle);
+			info!("DEBUG: No MoveActions remaining. Set GameState to Battle.");
+		}
 	} else {
 	
 		for (entity, mut transform, mut unit_actions, mut pos, move_action_component, mut move_actions, mut dir) in unit_query.iter_mut() {
@@ -2678,7 +2708,6 @@ mut next_state: ResMut<NextState<TurnState>>,
 	}
 }
 
-// Prototype
 fn handle_choose_move(
 mut commands: Commands,
 mut input: ResMut<Input<KeyCode>>,
@@ -2686,6 +2715,8 @@ mut unit_query: Query<(Entity, &MoveTiles, &Pos, &mut UnitActions), With<Current
 cursor_query: Query<&Cursor>,
 move_tiles_query: Query<Entity, With<MoveTile>>,
 mut next_state: ResMut<NextState<TurnState>>,
+game: Res<Game>,
+mut client: ResMut<Client>,
 ) {
 	let cursor = cursor_query.single();
 	let (entity, move_tiles, pos, mut unit_actions) = unit_query.single_mut();
@@ -2699,22 +2730,35 @@ mut next_state: ResMut<NextState<TurnState>>,
 				commands.entity(entity).despawn();
 			}
 			
-			// Insert a `Move` `UnitAction` towards the target tile.
-			info!("DEBUG: Unit can move to this tile.");
-			info!("DEBUG: Moving unit...");
-			
-			unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
-					origin: Pos { x: pos.x, y: pos.y, },
-					destination: Pos { x: cursor.x, y: cursor.y },
-					timer: Timer::from_seconds(4.0, TimerMode::Once),
-			}, 0.0));
-			
-			// Set State
-			next_state.set(TurnState::Turn);
-			
-			
+			if !game.is_multiplayer {
+				// Game is in single-player mode.
+				// Insert a `Move` `UnitAction` towards the target tile.
+				info!("DEBUG: Unit can move to this tile.");
+				info!("DEBUG: Moving unit...");
+				
+				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+						origin: Pos { x: pos.x, y: pos.y, },
+						destination: Pos { x: cursor.x, y: cursor.y },
+						timer: Timer::from_seconds(4.0, TimerMode::Once),
+				}, 0.0));
+				
+				// Set State
+				next_state.set(TurnState::Turn);
+			} else {
+				// Game is in multiplayer mode.
+				// Send a `ClientMessage::Move` message to the server.
+				info!("DEBUG: Unit can move to this tile.");
+				info!("DEBUG: Sending `Move` message...");
+				client
+					.connection()
+					.try_send_message(ClientMessage::Move { 
+						origin: Pos { x: pos.x, y: pos.y, },
+						destination: Pos { x: cursor.x, y: cursor.y },
+					});
+				info!("DEBUG: Sent Wait message.");
+				
+			}			
 		}
-		
 	}
 	
 	if input.just_pressed(KeyCode::Escape) {
