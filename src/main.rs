@@ -113,6 +113,9 @@ enum ServerMessage {
 		damage: usize,
 		is_counterattack: bool,
 	},
+	GameOver {
+		winner: ControlledBy,
+	}
 }
 
 #[derive(Reflect)]
@@ -280,7 +283,7 @@ struct Cursor {
 	y: usize,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 struct Map {
 	map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>>,
 }
@@ -506,6 +509,7 @@ impl Default for Game {
     }
 }
 
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 enum ControlledBy {
 	Player,
 	AI,
@@ -688,6 +692,7 @@ fn main() {
 		.run_if(in_state(GameState::Battle))
 	);
 	app.add_systems(OnTransition { from: GameState::Ambush, to: GameState::MainMenu, }, handle_ambush_to_main_menu_transition);
+	app.add_systems(OnTransition { from: GameState::Battle, to: GameState::MainMenu, }, handle_ambush_to_main_menu_transition);
 	app.add_systems(Update, position_cursor
 		.run_if(in_state(TurnState::Turn))
 	);
@@ -1388,12 +1393,20 @@ fn handle_player_turn_server_message(
 	mut units: Query<(Entity, &UnitId, &mut WTCurrent, &mut UnitActions)>,
 //	mut current_unit_query: Query<(Entity, &mut UnitActions), With<CurrentUnit>>,
 	mut game: ResMut<Game>,
-	map_query: Query<&Map>,
+	map_query: Query<&mut Map>,
 	mut next_state: ResMut<NextState<GameState>>,
 	mut next_turn_state: ResMut<NextState<TurnState>>,
 	state: Res<State<GameState>>,
 ) {
-	let map = &map_query.single().map;
+	let mut map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>)>> = Vec::new();
+	match state.get() {
+		GameState::MainMenu => {
+			empty_system();
+		},
+		_ => {
+			map = map_query.single().map.clone();
+		}
+	}  
 
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
@@ -1534,6 +1547,17 @@ fn handle_player_turn_server_message(
 				next_turn_state.set(TurnState::Turn);
 				
 				
+			},
+			ServerMessage::GameOver { winner } => {
+				info!("DEBUG: Battle is over.");
+				info!("DEBUG: Winner is: {:?}.", winner);
+				
+				info!("DEBUG: Setting GameState to MainMenu...");
+				next_state.set(GameState::MainMenu);
+				info!("DEBUG: Set GameState to MainMenu.");
+				info!("DEBUG: Setting TurnState to Wait...");
+				next_turn_state.set(TurnState::Wait);
+				info!("DEBUG: Set TurnState to Wait.");
 			},
 			_ => { empty_system(); },
 		}
