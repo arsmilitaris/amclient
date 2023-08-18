@@ -57,6 +57,7 @@ enum UnitAction {
 	BasicAttack {
 		target: Pos,
 		is_counterattack: bool,
+		damage: usize,
 	},
 	DoNothing,
 }
@@ -77,6 +78,11 @@ enum ClientMessage {
 	Move {
 		origin: Pos,
 		destination: Pos,
+	},
+	BasicAttack {
+		attacker: Pos,
+		target: Pos,
+		damage: usize,
 	},
 }
 
@@ -100,6 +106,12 @@ enum ServerMessage {
 	Move {
 		origin: Pos,
 		destination: Pos,
+	},
+	BasicAttack {
+		attacker: Pos,
+		target: Pos,
+		damage: usize,
+		is_counterattack: bool,
 	},
 }
 
@@ -235,6 +247,7 @@ struct TalkAction {
 struct BasicAttackAction {
 	target: Pos,
 	is_counterattack: bool,
+	damage: usize,
 }
 
 #[derive(Component)]
@@ -1372,13 +1385,16 @@ fn handle_player_turn_server_message(
 	mut client: ResMut<Client>,
 	mut commands: Commands,
 	client_data: Res<ClientData>,
-	mut units: Query<(Entity, &UnitId, &mut WTCurrent)>,
-	mut current_unit_query: Query<(Entity, &mut UnitActions), With<CurrentUnit>>,
+	mut units: Query<(Entity, &UnitId, &mut WTCurrent, &mut UnitActions)>,
+//	mut current_unit_query: Query<(Entity, &mut UnitActions), With<CurrentUnit>>,
 	mut game: ResMut<Game>,
+	map_query: Query<&Map>,
 	mut next_state: ResMut<NextState<GameState>>,
 	mut next_turn_state: ResMut<NextState<TurnState>>,
 	state: Res<State<GameState>>,
 ) {
+	let map = &map_query.single().map;
+
 	while let Ok(Some(message)) = client.connection_mut().receive_message::<ServerMessage>() {
 		match message {
 			ServerMessage::PlayerTurn { client_id, current_unit } => {
@@ -1390,7 +1406,7 @@ fn handle_player_turn_server_message(
 				info!("DEBUG: Set current unit to {}.", game.current_unit);
 				
 				// Assign the `CurrentUnit` component to the current unit.
-				for (entity, unit_id, mut current_wt) in units.iter_mut() {
+				for (entity, unit_id, mut current_wt, mut unit_actions) in units.iter_mut() {
 					if unit_id.value == game.current_unit {
 						info!("DEBUG: Inserting `CurrentUnit` component into unit {}.", unit_id.value);
 						commands.entity(entity).insert(CurrentUnit {});
@@ -1436,7 +1452,7 @@ fn handle_player_turn_server_message(
 				
 				// Update unit WTs.
 				for unit_wt in wait_turns {
-					for (entity, unit_id, mut current_wt) in units.iter_mut() {
+					for (entity, unit_id, mut current_wt, mut unit_actions) in units.iter_mut() {
 						if unit_id.value == unit_wt.0.value {
 							current_wt.value = unit_wt.1.value;
 							//break;
@@ -1454,9 +1470,11 @@ fn handle_player_turn_server_message(
 				info!("DEBUG: Received Wait message.");
 				
 				// Remove the `CurrentUnit` component from the current unit.
-				for (entity, mut unit_actions) in current_unit_query.iter_mut() {
-					info!("DEBUG: Removing `CurrentUnit` component from unit.");
-					commands.entity(entity).remove::<CurrentUnit>();
+				for (entity, unit_id, mut current_wt, mut unit_actions) in units.iter_mut() {
+					if unit_id.value == game.current_unit {
+						info!("DEBUG: Removing `CurrentUnit` component from unit.");
+						commands.entity(entity).remove::<CurrentUnit>();
+					}
 				}
 				
 				info!("DEBUG: Setting GameState to Wait...");
@@ -1474,14 +1492,49 @@ fn handle_player_turn_server_message(
 				
 				// Insert `Move` `UnitAction` into current unit.
 				info!("DEBUG: Inserting `Move` `UnitAction` into current unit...");
-				let (entity, mut unit_actions) = current_unit_query.single_mut();
-				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
-					origin: Pos { x: origin.x, y: origin.y, },
-					destination: Pos { x: destination.x, y: destination.y },
-					timer: Timer::from_seconds(4.0, TimerMode::Once),
-				}, 0.0));
-				info!("DEBUG: Finished inserting `Move` `UnitAction` into current unit.");
-			}
+				for (entity, unit_id, mut current_wt, mut unit_actions) in units.iter_mut() {
+					if unit_id.value == game.current_unit {
+						unit_actions.unit_actions.push(UnitActionTuple(UnitAction::Move {
+							origin: Pos { x: origin.x, y: origin.y, },
+							destination: Pos { x: destination.x, y: destination.y },
+							timer: Timer::from_seconds(4.0, TimerMode::Once),
+						}, 0.0));
+						info!("DEBUG: Finished inserting `Move` `UnitAction` into current unit.");
+					}
+				}
+			},
+			ServerMessage::BasicAttack { attacker, target, damage, is_counterattack } => {
+				info!("DEBUG: Received `BasicAttack` message from server.");
+				
+				// Insert `BasicAttack` `UnitAction` into current unit.
+				info!("DEBUG: Inserting `BasicAttack` `UnitAction` into current unit...");
+				if let Ok((entity, unit_id, mut current_wt, mut unit_actions)) = units.get_mut(map[attacker.x][attacker.y].2[map[attacker.x][attacker.y].2.len() - 1]) {
+					unit_actions.unit_actions.push(UnitActionTuple(UnitAction::BasicAttack {
+						target: Pos { x: target.x, y: target.y, },
+						is_counterattack: is_counterattack,
+						damage: damage.clone(),
+					}, 0.0));
+					info!("DEBUG: Finished inserting `BasicAttack` `UnitAction` into current unit.");
+				}
+				
+				// Get the attacker and target entities from map.
+				let entity = map[attacker.x][attacker.y].2[map[attacker.x][attacker.y].2.len() - 1];
+				let target_entity = map[target.x][target.y].2[map[target.x][target.y].2.len() - 1];
+				
+				// Insert an `Attacker` marker component on the attacking unit.
+				commands.entity(entity).insert(Attacker {});
+				
+				// Insert the `Target` marker component on the target unit.
+				commands.entity(target_entity).insert(Target {});
+								
+				// Remove the AttackTiles component from the unit.
+				commands.entity(entity).remove::<AttackTiles>();
+				
+				// Set State
+				next_turn_state.set(TurnState::Turn);
+				
+				
+			},
 			_ => { empty_system(); },
 		}
 	}
@@ -1872,9 +1925,9 @@ time: Res<Time>,
 					info!("DEBUG: Current unit action is Talk.");
 					commands.entity(entity).insert(TalkAction { message: message.clone(), });
 				},
-				UnitAction::BasicAttack { target, is_counterattack, } => {
+				UnitAction::BasicAttack { target, is_counterattack, damage } => {
 					info!("DEBUG: Current unit action is BasicAttack.");
-					commands.entity(entity).insert(BasicAttackAction { target: target.clone(), is_counterattack: is_counterattack.clone(), });
+					commands.entity(entity).insert(BasicAttackAction { target: target.clone(), is_counterattack: is_counterattack.clone(), damage: damage.clone(), });
 				}
 				UnitAction::DoNothing => {
 					info!("DEBUG: Current unit action is DoNothing.");
@@ -1938,6 +1991,7 @@ mut map_query: Query<&mut Map>,
 mut unit_query: Query<(Entity, &mut Transform, &mut UnitActions, &mut Pos, &MoveAction, &mut MoveActions, &mut DIR), Without<GameText>>,
 tile_transform_query: Query<&Transform, (With<GameText>, Without<Unit>)>,
 mut next_state: ResMut<NextState<GameState>>,
+mut next_turn_state: ResMut<NextState<TurnState>>,
 game: Res<Game>,
 time: Res<Time>,
 ) {
@@ -1950,11 +2004,19 @@ time: Res<Time>,
 			info!("DEBUG: No MoveActions remaining. Setting GameState to Ambush.");
 			next_state.set(GameState::Ambush);
 			info!("DEBUG: No MoveActions remaining. Set GameState to Ambush.");
+			// Set TurnState to Turn.
+			info!("DEBUG: Setting TurnState to Turn...");
+			next_turn_state.set(TurnState::Turn);
+			info!("DEBUG: Set TurnState to Turn.");
 		} else {
 			// Game is in Multiplayer mode.
 			info!("DEBUG: No MoveActions remaining. Setting GameState to Battle.");
 			next_state.set(GameState::Battle);
 			info!("DEBUG: No MoveActions remaining. Set GameState to Battle.");
+			// Set TurnState to Turn.
+			info!("DEBUG: Setting TurnState to Turn...");
+			next_turn_state.set(TurnState::Turn);
+			info!("DEBUG: Set TurnState to Turn.");
 		}
 	} else {
 	
@@ -2178,9 +2240,12 @@ mut commands: Commands,
 map_query: Query<&Map>,
 mut attack_unit_query: Query<(Entity, &UnitId, &mut UnitActions, &STR, &Pos, &mut DIR, &BasicAttackAction), (With<Attacker>, Without<Target>)>,
 mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &AttackRange, &AttackType), (With<Target>, Without<Attacker>)>,
+game: Res<Game>,
 ) {
 	let map = &map_query.single().map;
-
+	
+	//info!("DEBUG: attack_unit_query length is: {}.", attack_unit_query.iter().len());
+	
 	for (entity, unit_id, mut unit_actions, str, pos, mut dir, basic_attack_action) in attack_unit_query.iter_mut() {
 		info!("DEBUG: Processing BasicAttack action...");
 		
@@ -2202,15 +2267,21 @@ mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &
 				dir.direction = Direction::North;
 			}
 			
-			// Compute a random number between -3 to 3.
-			let mut rng = rand::thread_rng();
-			let random_dmg = rng.gen_range(0..7);
-			let random_dmg_modifier = random_dmg - 3;
+			let mut damage: usize = 0;
+			if !game.is_multiplayer {
+				// Compute a random number between -3 to 3.
+				let mut rng = rand::thread_rng();
+				let random_dmg = rng.gen_range(0..7);
+				let random_dmg_modifier = random_dmg - 3;
+				
+				
+				// Add random modifier to damage.
+				// Damage is (STR / 3) + modifier.
+				damage = (str.value / 3) + random_dmg_modifier;
+			} else {
+				damage = basic_attack_action.damage;
+			}
 			
-			
-			// Add random modifier to damage.
-			// Damage is (STR / 3) + modifier.
-			let damage = (str.value / 3) + random_dmg_modifier;
 			
 			// Subtract damage from target HP.
 			if damage > hp_current.value {
@@ -2237,8 +2308,22 @@ mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &
 			// Remove Target marker component from the target.
 			commands.entity(target_entity).remove::<Target>();
 			
+			if game.is_multiplayer {
+				// Remove Attacker marker component.
+				commands.entity(entity).remove::<Attacker>();
+				
+				// Remove BasicAttack UnitAction.
+				unit_actions.unit_actions.remove(0);
+				unit_actions.processing_unit_action = false;
+				commands.entity(entity).remove::<BasicAttackAction>();
+				
+				info!("DEBUG: Processed BasicAttack action.");
+				
+				return;
+			}
+			
 			match unit_actions.unit_actions[0].0 {
-				UnitAction::BasicAttack { target, is_counterattack, } => {
+				UnitAction::BasicAttack { target, is_counterattack, damage } => {
 					// If it is not already a counter-attack...
 					if !is_counterattack {
 						// If target is not a ranged unit...
@@ -2256,6 +2341,7 @@ mut target_unit_query: Query<(&UnitId, &mut UnitActions, &Pos, &mut HPCurrent, &
 									target_unit_actions.unit_actions.push(UnitActionTuple(UnitAction::BasicAttack {
 										target: Pos { x: pos.x, y: pos.y, },
 										is_counterattack: true,
+										damage: 0,
 									}, 0.0));
 									
 									// Insert the Attacker marker component on the counter-attacking unit.
@@ -2755,7 +2841,7 @@ mut client: ResMut<Client>,
 						origin: Pos { x: pos.x, y: pos.y, },
 						destination: Pos { x: cursor.x, y: cursor.y },
 					});
-				info!("DEBUG: Sent Wait message.");
+				info!("DEBUG: Sent Move message.");
 				
 			}			
 		}
@@ -2832,6 +2918,8 @@ mut input: ResMut<Input<KeyCode>>,
 mut unit_query: Query<(Entity, &AttackTiles, &Pos, &mut UnitActions), With<CurrentUnit>>,
 cursor_query: Query<&Cursor>,
 attack_tiles_query: Query<Entity, With<AttackTile>>,
+client: Res<Client>,
+game: Res<Game>,
 mut next_state: ResMut<NextState<TurnState>>,
 ) {
 	let map = &map_query.single().map;
@@ -2843,38 +2931,59 @@ mut next_state: ResMut<NextState<TurnState>>,
 		// Check if cursor is in a AttackTile.
 		let cursor_pos = Pos { x: cursor.x, y: cursor.y, };
 		if attack_tiles.attack_tiles.contains(&cursor_pos) {
-		
-			// Check it there is an unit on the tile.
-			// So that the player won't attack empty tiles.
-			// In the future we will add the option to attack empty tiles.
-			// To be in accordance with Tactics Ogre.
 			
-			if map[cursor.x][cursor.y].2.len() > 0 {
+			if !game.is_multiplayer {
+				// Game is in single-player mode.
+			
+				// Check it there is an unit on the tile.
+				// So that the player won't attack empty tiles.
+				// In the future we will add the option to attack empty tiles.
+				// To be in accordance with Tactics Ogre.
+				
+				if map[cursor.x][cursor.y].2.len() > 0 {
+					// Remove the AttackTiles
+					for entity in attack_tiles_query.iter() {
+						commands.entity(entity).despawn();
+					}
+					
+					// Insert an `Attack` `UnitAction` towards the target unit.
+					info!("DEBUG: Unit can attack this tile.");
+					info!("DEBUG: Attacking...");
+					unit_actions.unit_actions.push(UnitActionTuple(UnitAction::BasicAttack {
+						target: Pos { x: cursor.x, y: cursor.y, },
+						is_counterattack: false,
+						damage: 0,
+					}, 0.0));
+					
+					// Insert an `Attacker` marker component on the attacking unit.
+					commands.entity(entity).insert(Attacker {});
+					
+					// Insert the `Target` marker component on the target unit.
+					let target_entity = map[cursor.x][cursor.y].2[0];
+					commands.entity(target_entity).insert(Target {});
+									
+					// Remove the AttackTiles component from the unit.
+					commands.entity(entity).remove::<AttackTiles>();
+					
+					// Set State
+					next_state.set(TurnState::Turn);
+				}
+			} else {
+				// Game is in multiplayer mode.
+				info!("DEBUG: Sending BasicAttack message...");
+				client
+					.connection()
+					.try_send_message(ClientMessage::BasicAttack {
+						attacker: Pos { x: pos.x, y: pos.y, },
+						target: Pos { x: cursor.x, y: cursor.y, },
+						damage: 0,
+					});
+				info!("DEBUG: Sent BasicAttack message.");
+				
 				// Remove the AttackTiles
 				for entity in attack_tiles_query.iter() {
 					commands.entity(entity).despawn();
 				}
-				
-				// Insert an `Attack` `UnitAction` towards the target unit.
-				info!("DEBUG: Unit can attack this tile.");
-				info!("DEBUG: Attacking...");
-				unit_actions.unit_actions.push(UnitActionTuple(UnitAction::BasicAttack {
-					target: Pos { x: cursor.x, y: cursor.y, },
-					is_counterattack: false,
-				}, 0.0));
-				
-				// Insert an `Attacker` marker component on the attacking unit.
-				commands.entity(entity).insert(Attacker {});
-				
-				// Insert the `Target` marker component on the target unit.
-				let target_entity = map[cursor.x][cursor.y].2[0];
-				commands.entity(target_entity).insert(Target {});
-								
-				// Remove the AttackTiles component from the unit.
-				commands.entity(entity).remove::<AttackTiles>();
-				
-				// Set State
-				next_state.set(TurnState::Turn);
 			}
 		}
 	}
