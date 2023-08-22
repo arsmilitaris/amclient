@@ -25,7 +25,7 @@ use bevy_quinnet::{
     shared::ClientId,
 };
 
-use bevy_console::{ConsoleConfiguration, ConsolePlugin, ToggleConsoleKey};
+use bevy_console::{ConsoleConfiguration, ConsolePlugin, ToggleConsoleKey, PrintConsoleLine, ConsoleOpen};
 use bevy_console::{reply, AddConsoleCommand, ConsoleCommand,};
 use clap::{Parser};
 
@@ -43,6 +43,13 @@ use rand::Rng;
 
 use pathfinding::prelude::astar;
 use std::cell::RefCell;
+
+use slog::{o, Drain, Logger, Record, Level, OwnedKVList, KV};
+use slog_term::{FullFormat, TermDecorator, PlainDecorator};
+use slog_async::Async;
+use std::sync::Mutex;
+use std::error::Error;
+use std::thread_local;
 
 #[derive(Reflect)]
 enum UnitAction {
@@ -526,11 +533,20 @@ struct DemoData {
 	current_unit: UnitId,
 }
 
+#[derive(Resource)]
+struct Slog {
+	logger: slog::Logger,
+}
+
 // Client & Server
 fn main() {
 	std::panic::set_hook(Box::new(custom_panic_hook));
 	
+//	// Setup the logger
+//    let log = setup_logging();
+	
     let mut app = App::new();
+//  app.insert_resource(Slog { logger: log, });
 	app.add_plugins(
 		DefaultPlugins.set(WindowPlugin {
 			primary_window: Some(Window {
@@ -539,6 +555,7 @@ fn main() {
 			}),
 			..default()
 		})
+//		.disable::<LogPlugin>()
 		.set(LogPlugin {
 			file_appender_settings: Some(FileAppenderSettings {
 				prefix: String::from("amclient.log"),
@@ -553,6 +570,10 @@ fn main() {
 		.insert_resource(ConsoleConfiguration {
 			// Override config here.
 			keys: vec![ToggleConsoleKey::KeyCode(KeyCode::Backslash)],
+			left_pos: 0.0,
+			top_pos: 600.0,
+			height: 150.0,
+			width: 400.0,
 			..Default::default()
 		});
 	app.add_plugin(WorldInspectorPlugin::new());
@@ -590,6 +611,7 @@ fn main() {
 		app.add_systems(Startup, set_window_icon);
 	} 
 	
+//	app.add_systems(Startup, test_slog);
 	app.add_systems(OnEnter(GameState::MainMenu),
 		(start_connection, send_get_client_id_message)
 			.chain()
@@ -658,6 +680,8 @@ fn main() {
 		.after(spawn_units)
 	);
 	app.add_systems(OnExit(GameState::LoadAmbush), handle_unit_directions);
+	app.add_systems(OnExit(GameState::LoadAmbush), test_write_to_console);
+	app.add_systems(OnExit(GameState::LoadAmbush), toggle_console);
 	app.add_systems(Update, z_order_system
 		.run_if(in_state(GameState::Ambush))
 	);
@@ -1322,7 +1346,8 @@ fn start_connection(mut client: ResMut<Client>) {
 		.open_connection(
 			ConnectionConfiguration::from_strings(
 				//"127.0.0.1:6000",
-				"139.162.244.70:6000",
+				//"139.162.244.70:6000",
+				"178.79.171.209:6000",
                 "0.0.0.0:0",
             ).unwrap(),
             CertificateVerificationMode::SkipVerification,
@@ -3578,6 +3603,65 @@ fn find_possible_attacks(map: Vec<Vec<(usize, TileType, Vec<Entity>, Vec<Entity>
 fn custom_panic_hook(info: &std::panic::PanicInfo) {
     // Perform any necessary logging or error handling here
     error!("Panic occurred: {:?}", info);
+}
+
+//// Logging
+//fn setup_logging(world: World) -> Logger {
+//    let file = File::create("amclient.slog").expect("Failed to create log file");
+//
+//    let decorator = TermDecorator::new().build();
+//    let stdout_drain = Mutex::new(slog_term::FullFormat::new(decorator).build()).fuse();
+//
+//    let file_drain = Mutex::new(slog_term::FullFormat::new(slog_term::PlainDecorator::new(file))
+//        .use_original_order()
+//        .build())
+//        .fuse();
+//	
+//	let console_drain = Mutex::new(BevyConsoleDrain { world: world, }).fuse();
+//	
+//    // Combine the stdout and file drains.
+//    let stdout_and_file_drain = slog::Duplicate::new(stdout_drain, file_drain).fuse();
+//	
+//	// Combine the `stdout_and_file_drain` with the `console_drain`.
+//	let log_drain = slog::Duplicate::new(stdout_and_file_drain, console_drain).fuse();
+//	
+//    let logger = slog::Logger::root(log_drain, o!());
+//
+//    logger
+//}
+//
+//// Logging
+//fn test_slog(slog: Res<Slog>) {
+//	slog::info!(slog.logger, "This is a test for slog.");
+//}
+//
+//// Logging
+//struct BevyConsoleDrain {
+//	world: World,
+//}
+//
+//impl Drain for BevyConsoleDrain {
+//    type Ok = ();
+//    type Err = Box<dyn Error + Send + Sync>;
+//
+//    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+//        // Create the log message using the record and values
+//        let msg = format!("{}", record.msg());
+//        
+//        if let Ok(mut events) = self.world.get_resource_mut::<Event<PrintConsoleLine>>() {
+//            events.send(PrintConsoleLine(msg.clone()));
+//        }
+//
+//        Ok(())
+//    }
+//}
+
+fn toggle_console(mut console_open: ResMut<ConsoleOpen>) {
+	console_open.open = true;
+}
+
+fn test_write_to_console(mut console_line: EventWriter<PrintConsoleLine>) {
+	console_line.send(PrintConsoleLine::new("DEBUG: This is a test in writing to the console.".into()));
 }
 
 fn empty_system() {
