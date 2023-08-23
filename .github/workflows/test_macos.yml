@@ -1,0 +1,67 @@
+---
+name: Test MacOS release
+on: workflow_dispatch
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build-macOS:
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Get `amengine`
+        run: git clone https://github.com/arsmilitaris/amengine.git ../amengine
+      - name: Add Rust macOS Intel target
+        run: rustup target add x86_64-apple-darwin
+      - name: Add Rust macOS Apple Silicon target
+        run: rustup target add aarch64-apple-darwin
+      - name: Configure Environment
+        run: export MACOSX_DEPLOYMENT_TARGET="10.9"
+      - name: Create AppBundle directory structure
+        run: mkdir -p "ArsMilitaris.app/Contents/MacOS"
+      - name: Create AppBundle directory structure
+        run: mkdir -p "ArsMilitaris.app/Contents/Resources"
+      - name: Build for x86_64-apple-darwin
+        run: cargo build --release --target x86_64-apple-darwin
+      - name: Build for aarch64-apple-darwin
+        run: cargo build --release --target aarch64-apple-darwin
+      - name: Combine the two executables into one
+        run: lipo "target/x86_64-apple-darwin/release/amclient"
+          "target/aarch64-apple-darwin/release/amclient" -create -output
+          "ArsMilitaris.app/Contents/MacOS/ArsMilitaris"
+      - name: Copy Info.plist to Bundle
+        run: cp Info.plist "ArsMilitaris.app/Contents/Info.plist"
+      - name: Copy assets directory to Bundle
+        run: cp -a assets "ArsMilitaris.app/Contents/MacOS/"
+      - name: Copy src directory to Bundle
+        run: cp -a src "ArsMilitaris.app/Contents/MacOS/"
+      - name: Create icon and copy to Bundle
+        run: mkdir -p AppIcon.iconset
+      - name: Create icon and copy to Bundle
+        run: sips -z 16 16 "amlogo.png" --out AppIcon.iconset/icon_16x16.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 32 32     "amlogo.png" --out AppIcon.iconset/icon_16x16@2x.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 32 32     "amlogo.png" --out AppIcon.iconset/icon_32x32.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 64 64     "amlogo.png" --out AppIcon.iconset/icon_32x32@2x.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 128 128   "amlogo.png" --out AppIcon.iconset/icon_128x128.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 256 256   "amlogo.png" --out AppIcon.iconset/icon_128x128@2x.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 256 256   "amlogo.png" --out AppIcon.iconset/icon_256x256.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 512 512   "amlogo.png" --out AppIcon.iconset/icon_256x256@2x.png
+      - name: Create icon and copy to Bundle
+        run: sips -z 512 512   "amlogo.png" --out AppIcon.iconset/icon_512x512.png
+      - name: Create icon and copy to Bundle
+        run: cp "amlogo.png" AppIcon.iconset/icon_512x512@2x.png
+      - name: Create icon and copy to Bundle
+        run: iconutil -c icns AppIcon.iconset
+      - name: Create icon and copy to Bundle
+        run: mv AppIcon.icns ArsMilitaris.app/Contents/Resources
+      - name: Create DMG file
+        run: hdiutil create -fs HFS+ -volname "Ars Militaris" -srcfolder
+          "ArsMilitaris.app" "arsmilitaris.dmg"
+      - name: Run Ars Militaris
+        run: ./arsmilitaris.dmg       
